@@ -36,6 +36,26 @@ The health endpoint is available at <http://127.0.0.1:8000/health> and returns:
 {"status": "ok"}
 ```
 
+## Database
+
+Local development uses SQLite through SQLAlchemy 2.x. By default, the application connects to
+`ai_news.db` in the project root. Local SQLite database files are ignored by Git.
+
+Set `DATABASE_URL` to use a different database location:
+
+```bash
+export DATABASE_URL="sqlite:///./local-news.db"
+```
+
+Create the database tables from the project root:
+
+```bash
+python -c "from app.database import init_db; init_db()"
+```
+
+Tests create isolated SQLite databases in pytest-managed temporary directories and do not modify
+the local development database.
+
 ## Run tests
 
 ```bash
