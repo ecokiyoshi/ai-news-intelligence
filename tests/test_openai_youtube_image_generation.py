@@ -73,8 +73,8 @@ def test_openai_generator_uses_installed_images_api_shape_and_decodes_base64() -
     assert call == {
         "model": "image-model", "prompt": request().image_prompt,
         "size": "1792x1024", "n": 1, "output_format": "png",
-        "response_format": "b64_json",
     }
+    assert "response_format" not in call
     for expected_text in (
         "Original grounded visual", "horizontal 16:9", "unreadable text",
         "long Japanese text", "clean negative space", "typography",

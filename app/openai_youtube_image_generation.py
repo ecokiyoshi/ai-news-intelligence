@@ -26,7 +26,6 @@ class ImagesGenerator(Protocol):
         size: str,
         n: int,
         output_format: str,
-        response_format: str,
     ) -> Any: ...
 
 
@@ -63,7 +62,6 @@ class OpenAISceneImageGenerator:
             size=size,
             n=1,
             output_format="png",
-            response_format="b64_json",
         )
         data_items = getattr(response, "data", None)
         if not data_items:
