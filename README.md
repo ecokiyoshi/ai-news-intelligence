@@ -344,6 +344,55 @@ caller-injected; scheduler code constructs no OpenAI client and reads no API key
 real OpenAI providers can generate recurring API charges. Never commit API keys or populated
 environment files.
 
+## YouTube idea generation
+
+YouTube idea generation converts existing ranking output into compact, provider-independent
+context and structured video concepts:
+
+```text
+priority news → YouTubeIdeaSource → generator → YouTubeIdea
+```
+
+`YouTubeIdeaSource` contains only the matched article ID, title, optional summary, source,
+publication time, stored importance/relevance scores, and the existing `RankingResult` priority
+score. It does not recalculate ranking. `channel_focus` is a required caller-supplied topic, while
+`idea_count` defaults to 3 and accepts positive integers up to 10.
+
+```python
+from app.youtube_ideas import (
+    LocalYouTubeIdeaGenerator,
+    build_youtube_idea_sources,
+    generate_youtube_ideas,
+)
+
+sources = build_youtube_idea_sources(priority_articles, articles)
+ideas = generate_youtube_ideas(
+    sources,
+    LocalYouTubeIdeaGenerator(),
+    channel_focus="drone technology and regulation",
+    idea_count=3,
+)
+```
+
+The deterministic local generator needs no network or API key. Each `YouTubeIdea` includes source
+article IDs, title, hook, editorial angle, target audience, estimated length, thumbnail text,
+chapters, and SEO keywords.
+
+For OpenAI-backed generation, construct and inject `OpenAIYouTubeIdeaGenerator` in the same way as
+the other OpenAI providers:
+
+```python
+from openai import OpenAI
+
+from app.openai_youtube_ideas import OpenAIYouTubeIdeaGenerator
+
+generator = OpenAIYouTubeIdeaGenerator(client=OpenAI(), model="gpt-5.5")
+```
+
+The OpenAI provider uses Responses API typed structured output. Real calls may incur charges;
+never commit `OPENAI_API_KEY`. Ideas are not persisted yet. This feature does not add YouTube
+potential scoring, news clustering, script generation, image generation, or YouTube publishing.
+
 ## Run tests
 
 ```bash
