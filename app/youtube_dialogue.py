@@ -262,9 +262,23 @@ def validate_dialogue_script(
     characters: DialogueCharacters = DEFAULT_DIALOGUE_CHARACTERS,
     duration_tolerance_ratio: float = DEFAULT_DIALOGUE_DURATION_TOLERANCE,
 ) -> YouTubeDialogueScript:
+    validated = validate_dialogue_structure(script, source, characters)
+    tolerance = _ratio("duration_tolerance_ratio", duration_tolerance_ratio)
+    estimated_minutes = estimate_script_minutes(dialogue_text(validated))
+    if not math.isclose(estimated_minutes, source.target_minutes, rel_tol=tolerance):
+        raise ValueError("estimated dialogue runtime is outside the configured tolerance")
+    return validated
+
+
+def validate_dialogue_structure(
+    script: YouTubeDialogueScript,
+    source: YouTubeDialogueSource,
+    characters: DialogueCharacters = DEFAULT_DIALOGUE_CHARACTERS,
+) -> YouTubeDialogueScript:
+    """Validate dialogue metadata and structure without enforcing its runtime."""
+
     source = validate_dialogue_source(source)
     characters = validate_dialogue_characters(characters)
-    tolerance = _ratio("duration_tolerance_ratio", duration_tolerance_ratio)
     if not isinstance(script, YouTubeDialogueScript):
         raise ValueError("converter must return YouTubeDialogueScript")
     script = YouTubeDialogueScript(**script.__dict__)
@@ -303,9 +317,6 @@ def validate_dialogue_script(
         closing_lines=closing,
         seo_keywords=script.seo_keywords,
     )
-    estimated_minutes = estimate_script_minutes(dialogue_text(validated))
-    if not math.isclose(estimated_minutes, source.target_minutes, rel_tol=tolerance):
-        raise ValueError("estimated dialogue runtime is outside the configured tolerance")
     return validated
 
 

@@ -6,8 +6,10 @@ import pytest
 from app.openai_youtube_dialogue import (
     OpenAIDialogueChapter,
     OpenAIDialogueLine,
+    OpenAIDialogueChapterSupplement,
     OpenAIYouTubeDialogueConverter,
     OpenAIYouTubeDialogueResponse,
+    OpenAIYouTubeDialogueSupplementResponse,
 )
 from app.youtube_dialogue import (
     DEFAULT_DIALOGUE_CHARACTERS,
@@ -84,9 +86,55 @@ class FakeResponses:
         )])
 
 
+class SequencedFakeResponses:
+    def __init__(self, *parsed):
+        self.parsed = list(parsed)
+        self.calls = []
+
+    def parse(self, **kwargs):
+        self.calls.append(kwargs)
+        value = self.parsed.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return SimpleNamespace(output=[SimpleNamespace(
+            type="message", content=[SimpleNamespace(parsed=value)]
+        )])
+
+
 class FakeClient:
     def __init__(self, parsed=None, error: Exception | None = None):
         self.responses = FakeResponses(parsed, error)
+
+
+def short_response() -> OpenAIYouTubeDialogueResponse:
+    parsed = valid_response()
+    parsed.opening_lines = [
+        OpenAIDialogueLine(line_index=0, speaker="ハル", text="Why?"),
+        OpenAIDialogueLine(line_index=1, speaker="さび助", text="Context."),
+    ]
+    for chapter in parsed.chapters:
+        chapter.lines = [
+            OpenAIDialogueLine(line_index=0, speaker="ハル", text="Why?"),
+            OpenAIDialogueLine(line_index=1, speaker="さび助", text="Explanation."),
+        ]
+    parsed.closing_lines = [
+        OpenAIDialogueLine(line_index=0, speaker="さび助", text="Summary."),
+        OpenAIDialogueLine(line_index=1, speaker="ハル", text="Understood."),
+    ]
+    return parsed
+
+
+def sufficient_supplement(parsed: OpenAIYouTubeDialogueResponse | None = None):
+    parsed = parsed or short_response()
+    return OpenAIYouTubeDialogueSupplementResponse(chapters=[
+        OpenAIDialogueChapterSupplement(
+            chapter_index=chapter.chapter_index,
+            lines=[OpenAIDialogueLine(
+                line_index=len(chapter.lines), speaker="さび助", text=" ".join(["detail"] * 280),
+            )],
+        )
+        for chapter in parsed.chapters
+    ])
 
 
 def test_openai_converter_uses_typed_responses_and_complete_paired_context() -> None:
@@ -109,8 +157,112 @@ def test_openai_converter_uses_typed_responses_and_complete_paired_context() -> 
         "A model was released", '"chapter_index":0', "Why it matters",
         "Explain", "Background", '"estimated_seconds"', '"key_points"',
         '"narration"', '"closing"', '"seo_keywords"',
+        '"whole_script_target":2250', '"whole_script_minimum":1688',
+        '"whole_script_maximum":2812', '"chapter_targets"',
     ):
         assert expected in call["input"]
+    assert len(client.responses.calls) == 1
+
+
+def test_openai_converter_supplements_only_short_chapters_and_preserves_existing() -> None:
+    initial = short_response()
+    original = initial.model_copy(deep=True)
+    responses = SequencedFakeResponses(initial, sufficient_supplement(initial))
+    client = SimpleNamespace(responses=responses)
+
+    result = OpenAIYouTubeDialogueConverter(client=client).convert(
+        source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS
+    )
+
+    assert len(responses.calls) == 2
+    assert responses.calls[1]["text_format"] is OpenAIYouTubeDialogueSupplementResponse
+    assert result.opening_lines[0].text == original.opening_lines[0].text
+    assert result.closing_lines[0].text == original.closing_lines[0].text
+    for before, after in zip(original.chapters, result.chapters, strict=True):
+        assert [line.text for line in after.lines[:len(before.lines)]] == [
+            line.text for line in before.lines
+        ]
+        assert len(after.lines) == len(before.lines) + 1
+
+
+def test_openai_converter_rejects_unexpected_supplement_coverage() -> None:
+    initial = short_response()
+    supplement = sufficient_supplement(initial)
+    supplement.chapters.pop()
+    client = SimpleNamespace(responses=SequencedFakeResponses(initial, supplement))
+    with pytest.raises(ValueError, match="exact requested chapter order and coverage"):
+        OpenAIYouTubeDialogueConverter(client=client).convert(
+            source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS
+        )
+
+
+@pytest.mark.parametrize("kind", ["chapter", "reordered", "speaker", "line_index"])
+def test_openai_converter_rejects_malformed_supplement(kind: str) -> None:
+    initial = short_response()
+    supplement = sufficient_supplement(initial)
+    if kind == "chapter":
+        supplement.chapters[0].chapter_index = 99
+    elif kind == "reordered":
+        supplement.chapters[0], supplement.chapters[1] = (
+            supplement.chapters[1],
+            supplement.chapters[0],
+        )
+    elif kind == "speaker":
+        supplement.chapters[0].lines[0].speaker = "Narrator"
+    else:
+        supplement.chapters[0].lines[0].line_index += 1
+
+    with pytest.raises(ValueError):
+        OpenAIYouTubeDialogueConverter(
+            client=SimpleNamespace(
+                responses=SequencedFakeResponses(initial, supplement)
+            )
+        ).convert(source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS)
+
+
+def test_openai_converter_reports_remaining_shortfall_after_one_supplement() -> None:
+    initial = short_response()
+    supplement = sufficient_supplement(initial)
+    for chapter in supplement.chapters:
+        chapter.lines[0].text = "detail"
+    responses = SequencedFakeResponses(initial, supplement)
+    with pytest.raises(ValueError, match=r"remains too short.*remaining English words"):
+        OpenAIYouTubeDialogueConverter(
+            client=SimpleNamespace(responses=responses)
+        ).convert(source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS)
+    assert len(responses.calls) == 2
+
+
+def test_openai_converter_reports_overlong_supplement_without_retrying() -> None:
+    initial = short_response()
+    supplement = sufficient_supplement(initial)
+    for chapter in supplement.chapters:
+        chapter.lines[0].text = " ".join(["detail"] * 1000)
+    responses = SequencedFakeResponses(initial, supplement)
+    with pytest.raises(ValueError, match=r"exceeds.*after one supplement call"):
+        OpenAIYouTubeDialogueConverter(
+            client=SimpleNamespace(responses=responses)
+        ).convert(source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS)
+    assert len(responses.calls) == 2
+
+
+def test_openai_converter_does_not_supplement_an_overlong_dialogue() -> None:
+    parsed = valid_response()
+    parsed.chapters[0].lines[1].text = " ".join(["detail"] * 3000)
+    client = FakeClient(parsed)
+    with pytest.raises(ValueError, match="exceeds the configured maximum"):
+        OpenAIYouTubeDialogueConverter(client=client).convert(
+            source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS
+        )
+    assert len(client.responses.calls) == 1
+
+
+def test_openai_converter_propagates_supplement_provider_exception() -> None:
+    responses = SequencedFakeResponses(short_response(), RuntimeError("supplement unavailable"))
+    with pytest.raises(RuntimeError, match="supplement unavailable"):
+        OpenAIYouTubeDialogueConverter(
+            client=SimpleNamespace(responses=responses)
+        ).convert(source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS)
 
 
 @pytest.mark.parametrize("kind", ["missing", "reordered", "speaker", "blank"])
