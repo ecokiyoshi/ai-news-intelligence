@@ -150,6 +150,72 @@ with Session(engine) as session:
 Only real API calls incur OpenAI API charges. Automated tests inject fake clients, require no API
 key, and make no network requests.
 
+## Article scoring
+
+The provider-independent scoring service evaluates explicit article text with two 0–100 scores:
+
+- `importance_score` measures general news significance, impact, novelty, consequences, and urgency.
+- `relevance_score` measures relevance to a required, caller-supplied `relevance_target`; no topic is
+  hard-coded.
+
+It also stores a brief `score_reason` and a UTC `scored_at` timestamp. Blank article text, a blank
+target, scores outside 0–100, and empty reasons are rejected without changing the stored article.
+`LocalScorer` is deterministic and requires neither an API key nor network access:
+
+```python
+from sqlalchemy.orm import Session
+
+from app.database import engine
+from app.models import NewsArticle
+from app.scoring import LocalScorer, score_article
+
+with Session(engine) as session:
+    article = session.get(NewsArticle, 1)
+    if article is not None:
+        result = score_article(
+            article,
+            "Explicit article text to score.",
+            "AI industry and model releases",
+            LocalScorer(),
+            session,
+        )
+        print(result.importance_score, result.relevance_score, result.reason)
+```
+
+### OpenAI-backed scorer
+
+`OpenAIScorer` implements the same interface with the Responses API and structured output. It uses
+the same `OPENAI_API_KEY` and `OPENAI_MODEL` environment variables described above, or accepts a
+model and client directly:
+
+```python
+from openai import OpenAI
+from sqlalchemy.orm import Session
+
+from app.database import engine
+from app.models import NewsArticle
+from app.openai_scorer import OpenAIScorer
+from app.scoring import score_article
+
+client = OpenAI(timeout=30.0)
+scorer = OpenAIScorer(client=client, model="gpt-5.5")
+
+with Session(engine) as session:
+    article = session.get(NewsArticle, 1)
+    if article is not None:
+        result = score_article(
+            article,
+            "Explicit article text to score.",
+            "cybersecurity vulnerabilities and attacks",
+            scorer,
+            session,
+        )
+        print(result)
+```
+
+Real OpenAI API calls may incur charges. Never commit `OPENAI_API_KEY`, a populated `.env`, or
+other credentials. Tests use injected fake clients and never contact the OpenAI API.
+
 ## Run tests
 
 ```bash
