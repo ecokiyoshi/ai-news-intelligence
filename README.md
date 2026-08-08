@@ -254,6 +254,53 @@ with Session(engine) as session:
 limits how many selected articles can come from one source. Ranking makes no additional OpenAI API
 calls, so it adds no OpenAI API usage charges.
 
+## End-to-end pipeline
+
+The reusable single-run pipeline orchestrates the existing services in this order:
+
+```text
+RSS collection → persistence → summarization → scoring → ranking → priority selection
+```
+
+Providers and a SQLAlchemy session are injected by the caller. The required `relevance_target` is
+passed to the scorer and is never hard-coded. `MetadataTextProvider` offers a deterministic local
+text strategy using the stored title and, when available, the existing summary. It does not fetch,
+scrape, or claim to provide the full article body.
+
+```python
+from sqlalchemy.orm import Session
+
+from app.database import engine
+from app.pipeline import MetadataTextProvider, run_pipeline
+from app.scoring import LocalScorer
+from app.summarization import LocalSummarizer
+
+with Session(engine) as session:
+    result = run_pipeline(
+        ["https://example.com/feed.xml"],
+        "AI industry and model releases",
+        LocalSummarizer(),
+        LocalScorer(),
+        MetadataTextProvider(),
+        session,
+        limit=10,
+        minimum_priority_score=70,
+        max_per_source=2,
+        importance_weight=0.6,
+        relevance_weight=0.4,
+    )
+    print(result.priority_articles)
+```
+
+By default, articles with an existing summary are not summarized again, and articles with both
+scores are not rescored. Explicit `force_resummarize=True` and `force_rescore=True` options enable
+reprocessing. One article-level provider failure is counted and does not stop other articles.
+
+The pipeline is also compatible with injected `OpenAISummarizer` and `OpenAIScorer` instances.
+Construct those providers outside `run_pipeline`; real OpenAI calls may incur API charges and need
+`OPENAI_API_KEY`. The pipeline itself reads no secrets. This is an on-demand, single-run workflow;
+it does not add scheduling, background workers, or web scraping.
+
 ## Run tests
 
 ```bash
