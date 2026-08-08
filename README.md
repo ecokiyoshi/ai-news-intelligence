@@ -107,7 +107,48 @@ with Session(engine) as session:
 
 Empty or whitespace-only input raises `EmptySummaryInputError` without changing the article.
 Provider failures are rolled back and re-raised. Article titles are not used as an implicit text
-fallback. An OpenAI-backed provider and the OpenAI SDK are intentionally not implemented yet.
+fallback.
+
+### OpenAI-backed summarizer
+
+`OpenAISummarizer` implements the same provider-independent interface using the official OpenAI
+Python SDK and Responses API. The SDK reads `OPENAI_API_KEY` from the environment. Select a model
+with `OPENAI_MODEL` or the constructor's `model` argument:
+
+```bash
+export OPENAI_API_KEY="<your-key>"
+export OPENAI_MODEL="gpt-5.6"
+```
+
+Never commit an API key or a populated `.env` file. The tracked `.env.example` contains only empty
+or non-secret placeholders.
+
+```python
+from openai import OpenAI
+from sqlalchemy.orm import Session
+
+from app.database import engine
+from app.models import NewsArticle
+from app.openai_summarizer import OpenAISummarizer
+from app.summarization import summarize_article
+
+client = OpenAI(timeout=30.0)
+summarizer = OpenAISummarizer(client=client, model="gpt-5.6")
+
+with Session(engine) as session:
+    article = session.get(NewsArticle, 1)
+    if article is not None:
+        result = summarize_article(
+            article,
+            "Explicit article text to summarize.",
+            summarizer,
+            session,
+        )
+        print(result.summary)
+```
+
+Only real API calls incur OpenAI API charges. Automated tests inject fake clients, require no API
+key, and make no network requests.
 
 ## Run tests
 
