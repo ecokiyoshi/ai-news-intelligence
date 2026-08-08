@@ -672,6 +672,64 @@ dates, or outcomes or strengthen uncertainty into certainty.
 This feature adds no image prompts or generation, TTS, subtitles/SRT, Premiere integration,
 dialogue persistence or database changes, YouTube descriptions, upload, or publishing.
 
+## 16:9 visual planning and image prompts
+
+Visual planning converts the completed さび助×ハル dialogue into reusable text concepts and
+image-generation prompts without generating any image:
+
+```text
+さび助×ハル dialogue → scene segmentation → visual concepts → image prompts
+```
+
+A scene represents a coherent visual beat, not one image per dialogue line. Adjacent lines may be
+combined into one scene, while changes in topic, object, comparison, location, or explanatory
+purpose may begin another. Every chapter must be represented, every scene traces back to exact
+opening/chapter/closing line references, and scene chronology follows the source. Opening and
+closing scenes are included by the local planner but are not required by core validation.
+
+Supported visual types are `character_dialogue`, `realistic_scene`, `technical_explainer`,
+`infographic`, `map`, `timeline`, `comparison`, `object_closeup`, `environment`, and `title_card`.
+Every scene and prompt must explicitly use a horizontal `16:9` YouTube composition.
+
+```python
+from app.youtube_visuals import (
+    LocalYouTubeVisualPlanner,
+    generate_youtube_visual_plan,
+)
+
+visual_plan = generate_youtube_visual_plan(
+    dialogue_script,
+    LocalYouTubeVisualPlanner(),
+    channel_focus="AI industry news",
+)
+```
+
+An image prompt describes the grounded subject, environment, composition, camera/framing,
+lighting, mood, accuracy constraints, horizontal 16:9 layout, and clean typography space where
+appropriate. `overlay_text` is separate metadata for later graphics/Premiere work; prompts should
+not ask an image model to render long Japanese text. The concise negative prompt excludes common
+failures such as unreadable or garbled text, duplicate objects, malformed anatomy, watermarks, and
+vertical composition.
+
+For OpenAI-backed text planning, inject the typed Responses API provider:
+
+```python
+from openai import OpenAI
+
+from app.openai_youtube_visuals import OpenAIYouTubeVisualPlanner
+
+planner = OpenAIYouTubeVisualPlanner(client=OpenAI(), model="gpt-5.5")
+```
+
+The model can also be selected with `OPENAI_MODEL`. Real OpenAI text-generation calls may incur
+charges; never commit `OPENAI_API_KEY` or a populated `.env`. Planning uses supplied dialogue only:
+it performs no web research and must not invent facts, products, organizations, equipment,
+locations, statistics, dates, quotes, or outcomes.
+
+This feature creates text plans and prompts only. It does not call the OpenAI Images API or any
+image/video service, create or download PNG/JPG/WEBP files, store canonical character assets,
+generate TTS/subtitles, integrate with Premiere, persist plans, or upload to YouTube.
+
 ## Run tests
 
 ```bash
