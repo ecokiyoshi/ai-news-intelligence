@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from pydantic import ValidationError
 
 from app.openai_youtube_visuals import (
     YOUTUBE_VISUAL_INSTRUCTIONS,
@@ -94,6 +95,13 @@ def test_openai_instructions_require_16_by_9_overlay_and_no_one_line_segmentatio
     assert "long japanese text" in lowered and "overlay text separately" in lowered
     assert "one image for every line" in lowered
     assert "planning and prompt generation only" in lowered
+
+
+def test_openai_reference_schema_rejects_unsupported_section() -> None:
+    with pytest.raises(ValidationError):
+        OpenAIDialogueLineReference(
+            section="intro", chapter_index=None, line_index=0
+        )
 
 
 @pytest.mark.parametrize("kind", ["reference", "coverage", "visual_type", "ratio", "prompt"])

@@ -2,7 +2,7 @@
 
 import json
 import os
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from openai import OpenAI
 from pydantic import BaseModel, Field, StrictInt
@@ -38,7 +38,7 @@ Do not include image-API parameters. Return structured output only. Do not use w
 
 
 class OpenAIDialogueLineReference(BaseModel):
-    section: str = Field(min_length=1)
+    section: Literal["opening", "chapter", "closing"]
     chapter_index: StrictInt | None = None
     line_index: StrictInt = Field(ge=0)
 
