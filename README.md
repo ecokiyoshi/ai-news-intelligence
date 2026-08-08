@@ -393,6 +393,57 @@ The OpenAI provider uses Responses API typed structured output. Real calls may i
 never commit `OPENAI_API_KEY`. Ideas are not persisted yet. This feature does not add YouTube
 potential scoring, news clustering, script generation, image generation, or YouTube publishing.
 
+## YouTube Potential Score
+
+YouTube Potential Score evaluates whether a generated `YouTubeIdea` is promising as a video
+concept. It is independent from news importance, relevance, and priority scores and does not modify
+or recalculate them. Providers return five 0–100 dimensions, while provider-independent core code
+calculates the final score:
+
+```text
+youtube_potential_score =
+    topic_appeal × 0.30
+    + clarity × 0.20
+    + surprise × 0.20
+    + searchability × 0.15
+    + visual_explainability × 0.15
+```
+
+The dimensions measure topic appeal, explanatory clarity, truthful surprise/hook strength,
+searchability, and suitability for visual explanation. Weights are configurable, but each must be
+finite and between 0 and 1, and together they must equal 1.
+
+```python
+from app.youtube_potential import (
+    LocalYouTubePotentialScorer,
+    rank_youtube_ideas,
+    score_youtube_ideas,
+    select_top_youtube_ideas,
+)
+
+potential = score_youtube_ideas(
+    ideas,
+    LocalYouTubePotentialScorer(),
+    channel_focus="drone technology and regulation",
+)
+ranked = rank_youtube_ideas(ideas, potential)
+top = select_top_youtube_ideas(
+    ranked,
+    limit=3,
+    minimum_potential_score=80,
+)
+```
+
+`LocalYouTubePotentialScorer` is deterministic and needs no network or API key. For OpenAI-backed
+evaluation, inject `OpenAIYouTubePotentialScorer`; it uses Responses API typed structured output
+for dimension scores only, while the final weighted score remains calculated in core code. Real
+OpenAI calls may incur charges, and API keys must never be committed.
+
+`searchability_score` is only a heuristic based on the supplied title, topic, and SEO keywords. It
+is not measured YouTube or Google search volume, Google Trends data, CTR, audience size, or a view
+prediction. Potential results are not persisted, and this feature adds no trends integration,
+clustering, script generation, or database schema changes.
+
 ## Run tests
 
 ```bash
