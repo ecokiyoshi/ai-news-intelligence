@@ -25,7 +25,8 @@ This is visual planning and prompt generation only; do not generate or retrieve 
 the supplied dialogue into coherent visual beats. Do not blindly create one image for every line;
 combine adjacent lines when they share one concept. Preserve source chronology, represent every
 source chapter with at least one scene, and trace every scene to exact supplied dialogue lines. Use
-no more than the supplied maximum_scene_count, combining adjacent visual beats as needed while still
+scene_index values starting at zero and increasing consecutively in the returned scene-array order.
+Use no more than the supplied maximum_scene_count, combining adjacent visual beats as needed while still
 covering every source chapter and preserving chronology. Use only supplied factual context. Do not
 invent facts, statistics, events, organizations, equipment,
 product models, locations, dates, quotes, or outcomes. Choose only one of these visual types:
@@ -150,7 +151,7 @@ class OpenAIYouTubeVisualPlanner:
             aspect_ratio=ASPECT_RATIO,
             scenes=[
                 YouTubeVisualScene(
-                    scene_index=scene.scene_index,
+                    scene_index=scene_index,
                     source_refs=[
                         DialogueLineReference(
                             section=reference.section,
@@ -167,7 +168,7 @@ class OpenAIYouTubeVisualPlanner:
                     aspect_ratio=scene.aspect_ratio,
                     overlay_text=scene.overlay_text,
                 )
-                for scene in parsed.scenes
+                for scene_index, scene in enumerate(parsed.scenes)
             ],
         )
         return validate_visual_plan(plan, source)
