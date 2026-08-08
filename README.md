@@ -730,6 +730,90 @@ This feature creates text plans and prompts only. It does not call the OpenAI Im
 image/video service, create or download PNG/JPG/WEBP files, store canonical character assets,
 generate TTS/subtitles, integrate with Premiere, persist plans, or upload to YouTube.
 
+## YouTube scene image generation
+
+The execution layer turns a validated visual plan into actual scene image files and a deterministic
+manifest:
+
+```text
+YouTubeVisualPlan → image requests → provider → validation → files → manifest.json
+```
+
+Provider-independent core code owns scene selection, prompt composition, validation, retries,
+deterministic filenames, atomic filesystem writes, and manifest creation. A `SceneImageGenerator`
+only receives a `YouTubeImageRequest` and returns image bytes plus provider/model/media/dimension
+metadata; it never chooses paths or writes files.
+
+```python
+from pathlib import Path
+
+from app.youtube_image_generation import (
+    LocalSceneImageGenerator,
+    generate_youtube_scene_images,
+)
+
+result = generate_youtube_scene_images(
+    visual_plan,
+    LocalSceneImageGenerator(),
+    output_directory=Path("output"),
+)
+```
+
+The deterministic offline generator creates valid solid PNG fixtures without network access or an
+API key. A successful three-scene run produces:
+
+```text
+output/
+├── scene_000.png
+├── scene_001.png
+├── scene_002.png
+└── manifest.json
+```
+
+Use `scene_indexes=[3, 5]` to generate a subset; caller order is normalized back to visual-plan
+order. The default `scene_limit=50` is a cost guard checked before provider calls. Existing image
+files or `manifest.json` cause a preflight failure by default; replacement requires explicit
+`overwrite=True`.
+
+`max_retries=2` means up to three attempts, and only provider exceptions are retried. Invalid
+payloads are rejected immediately. On partial failure, already completed scene files remain, the
+failed scene index is included in `SceneImageGenerationError`, and no complete result or success
+manifest is written.
+
+Output uses deterministic `scene_NNN` filenames selected from the validated media type. Writes use
+a same-directory temporary file and atomic replacement. PNG/JPEG/WEBP signatures, positive
+dimensions, horizontal orientation, and approximate 16:9 ratio are checked. The default project
+size is `1792x1024`; its ratio differs from exact 16:9 by about 0.028 and is accepted by the
+documented `0.03` tolerance. Images are never resized, cropped, padded, or otherwise post-processed.
+
+The manifest preserves scene indexes, visual types, source dialogue references, file names,
+provider/model, media type, dimensions, final prompt, revised prompt, and overlay metadata.
+`overlay_text` is not burned into generated images; prompt composition only requests clean space
+for later typography.
+
+For real OpenAI generation, inject the Images API provider:
+
+```python
+from openai import OpenAI
+
+from app.openai_youtube_image_generation import OpenAISceneImageGenerator
+from app.youtube_image_generation import generate_youtube_scene_images
+
+result = generate_youtube_scene_images(
+    visual_plan,
+    OpenAISceneImageGenerator(client=OpenAI(), model="gpt-image-2"),
+    output_directory=Path("output"),
+)
+```
+
+The adapter uses the installed SDK's `client.images.generate` API with base64 PNG output and
+supports the project size `1792x1024`. Real generation incurs API charges. Never commit
+`OPENAI_API_KEY` or a populated `.env`; credentials are never written to manifests.
+
+This feature performs no overlay rasterization, character-reference conditioning, OCR/vision QA,
+resizing/cropping, Seedance/Veo generation, TTS, subtitles, Premiere integration, database
+persistence, or YouTube upload.
+
 ## Run tests
 
 ```bash
