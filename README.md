@@ -301,6 +301,49 @@ Construct those providers outside `run_pipeline`; real OpenAI calls may incur AP
 `OPENAI_API_KEY`. The pipeline itself reads no secrets. This is an on-demand, single-run workflow;
 it does not add scheduling, background workers, or web scraping.
 
+## Scheduled news pipeline
+
+`NewsPipelineScheduler` periodically invokes an injected, existing pipeline runner in-process. The
+default interval is 3,600 seconds (60 minutes); pass `interval_seconds` to change it. Importing or
+constructing the scheduler does not register work, start a thread, or run the pipeline.
+
+```python
+from app.database import SessionLocal
+from app.pipeline import MetadataTextProvider
+from app.scheduler import NewsPipelineScheduler, build_pipeline_runner
+from app.scoring import LocalScorer
+from app.summarization import LocalSummarizer
+
+runner = build_pipeline_runner(
+    SessionLocal,
+    ["https://example.com/feed.xml"],
+    "AI industry and model releases",
+    LocalSummarizer(),
+    LocalScorer(),
+    MetadataTextProvider(),
+)
+scheduler = NewsPipelineScheduler(runner, interval_seconds=3600)
+
+# Manual execution works without starting the schedule.
+result = scheduler.run_once()
+
+# Background scheduling is always explicit.
+scheduler.start()
+# On application shutdown:
+scheduler.shutdown()
+```
+
+`build_pipeline_runner` creates and closes a fresh SQLAlchemy session for every run; it never
+shares one long-lived session with the scheduler thread. The scheduler catches failed pipeline runs
+so a later interval can try again. A non-blocking application lock prevents a manual and scheduled
+run from overlapping, and repeated `start()` calls do not create duplicate jobs.
+
+The overlap lock protects only one Python process. It is not a distributed lock for multiple
+processes or containers. Summarizers, scorers, feeds, relevance targets, and text providers remain
+caller-injected; scheduler code constructs no OpenAI client and reads no API key. Scheduled use of
+real OpenAI providers can generate recurring API charges. Never commit API keys or populated
+environment files.
+
 ## Run tests
 
 ```bash
