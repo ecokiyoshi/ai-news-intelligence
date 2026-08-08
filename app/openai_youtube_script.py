@@ -1,6 +1,7 @@
 """OpenAI-backed YouTube outline and full narration providers."""
 
 import json
+import math
 import os
 from typing import Any, Protocol
 
@@ -35,7 +36,18 @@ and uncertainty, and explain technical terms accessibly. Do not invent quotes, s
 dates, numbers, companies, laws, or outcomes. Do not fabricate urgency or sensational claims and do
 not repeat points merely to increase length. Include a concise final takeaway and optionally a light
 neutral call to action. Target approximately the requested duration and return structured output
-only. Do not write character dialogue or speaker labels.
+only. Keep the complete script, including opening and closing, within the supplied English-word or
+Japanese-character range for the language you use. Treat the supplied per-chapter word and character
+targets as concrete length requirements. Do not write character dialogue or speaker labels.
+"""
+
+YOUTUBE_SCRIPT_SUPPLEMENT_INSTRUCTIONS = """\
+Generate narration only for the explicitly requested missing outline chapters. Return exactly one
+narration section for each requested chapter index and no other indexes. Do not regenerate or repeat
+the opening hook, closing, or existing narration. Match the established tone and transitions, use
+only the supplied context, and obey each missing chapter's concrete word or character target. Do not
+invent unsupported facts, quotes, sources, statistics, dates, numbers, companies, laws, or outcomes.
+Return structured output only without character dialogue or speaker labels.
 """
 
 
@@ -60,6 +72,10 @@ class OpenAIYouTubeScriptResponse(BaseModel):
     opening_hook: str = Field(min_length=1)
     narration_sections: list[OpenAIYouTubeNarrationSection] = Field(min_length=1)
     closing: str = Field(min_length=1)
+
+
+class OpenAIYouTubeNarrationSupplementResponse(BaseModel):
+    narration_sections: list[OpenAIYouTubeNarrationSection] = Field(min_length=1)
 
 
 class ResponsesParser(Protocol):
@@ -103,6 +119,76 @@ def _parsed_output(response: Any, message: str) -> Any:
             if parsed is not None:
                 return parsed
     raise ValueError(message)
+
+
+def _normalize_outline_duration(
+    chapters: list[YouTubeScriptChapter], target_minutes: int
+) -> list[YouTubeScriptChapter]:
+    """Scale provider duration estimates to the exact requested runtime."""
+
+    indexes = [chapter.chapter_index for chapter in chapters]
+    if len(set(indexes)) != len(indexes):
+        raise ValueError("outline contains a duplicate chapter_index")
+    if set(indexes) != set(range(len(chapters))):
+        raise ValueError("chapter indexes must be sequential from zero")
+    ordered = sorted(chapters, key=lambda chapter: chapter.chapter_index)
+    target_seconds = target_minutes * 60
+    if len(ordered) > target_seconds:
+        raise ValueError("outline contains too many chapters for the target duration")
+
+    total = sum(chapter.estimated_seconds for chapter in ordered)
+    exact = [chapter.estimated_seconds * target_seconds / total for chapter in ordered]
+    seconds = [max(1, math.floor(value)) for value in exact]
+    remaining = target_seconds - sum(seconds)
+    if remaining > 0:
+        priority = sorted(
+            range(len(ordered)), key=lambda index: exact[index] - seconds[index], reverse=True
+        )
+        for offset in range(remaining):
+            seconds[priority[offset % len(priority)]] += 1
+    elif remaining < 0:
+        priority = sorted(range(len(ordered)), key=lambda index: seconds[index], reverse=True)
+        for _ in range(-remaining):
+            index = next(index for index in priority if seconds[index] > 1)
+            seconds[index] -= 1
+
+    return [
+        YouTubeScriptChapter(
+            chapter_index=chapter.chapter_index,
+            title=chapter.title,
+            objective=chapter.objective,
+            estimated_seconds=seconds[index],
+            key_points=chapter.key_points,
+        )
+        for index, chapter in enumerate(ordered)
+    ]
+
+
+def _chapter_payload(chapter: YouTubeScriptChapter) -> dict[str, object]:
+    return {
+        **chapter.__dict__,
+        "target_english_words": round(chapter.estimated_seconds * 150 / 60),
+        "target_japanese_non_whitespace_characters": round(
+            chapter.estimated_seconds * 280 / 60
+        ),
+    }
+
+
+def _sections_by_index(
+    sections: list[OpenAIYouTubeNarrationSection],
+    *,
+    allowed_indexes: set[int],
+    context: str,
+) -> dict[int, OpenAIYouTubeNarrationSection]:
+    by_index: dict[int, OpenAIYouTubeNarrationSection] = {}
+    for section in sections:
+        index = section.chapter_index
+        if index not in allowed_indexes:
+            raise ValueError(f"{context} returned an unexpected chapter_index: {index}")
+        if index in by_index:
+            raise ValueError(f"{context} returned a duplicate chapter_index: {index}")
+        by_index[index] = section
+    return by_index
 
 
 class OpenAIYouTubeOutlineGenerator:
@@ -155,7 +241,7 @@ class OpenAIYouTubeOutlineGenerator:
             )
             for chapter in parsed.chapters
         ]
-        return validate_outline(chapters, target)
+        return validate_outline(_normalize_outline_duration(chapters, target), target)
 
 
 class OpenAIYouTubeScriptGenerator:
@@ -192,8 +278,22 @@ class OpenAIYouTubeScriptGenerator:
                 {
                     "channel_focus": focus,
                     "target_minutes": target,
+                    "required_complete_script_length": {
+                        "english_words_minimum": round(
+                            target * 150 * (1 - 0.20)
+                        ),
+                        "english_words_maximum": round(
+                            target * 150 * (1 + 0.20)
+                        ),
+                        "japanese_non_whitespace_characters_minimum": round(
+                            target * 280 * (1 - 0.20)
+                        ),
+                        "japanese_non_whitespace_characters_maximum": round(
+                            target * 280 * (1 + 0.20)
+                        ),
+                    },
                     "source": _source_payload(source),
-                    "chapters": [chapter.__dict__ for chapter in chapters],
+                    "chapters": [_chapter_payload(chapter) for chapter in chapters],
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
@@ -201,6 +301,58 @@ class OpenAIYouTubeScriptGenerator:
             text_format=OpenAIYouTubeScriptResponse,
         )
         parsed = _parsed_output(response, "OpenAI response did not contain a parsed script")
+        expected_indexes = set(range(len(chapters)))
+        sections = _sections_by_index(
+            parsed.narration_sections,
+            allowed_indexes=expected_indexes,
+            context="initial script response",
+        )
+        missing_indexes = expected_indexes - set(sections)
+        if missing_indexes:
+            missing_chapters = [
+                chapter for chapter in chapters if chapter.chapter_index in missing_indexes
+            ]
+            supplement_response = self.client.responses.parse(
+                model=self.model,
+                instructions=YOUTUBE_SCRIPT_SUPPLEMENT_INSTRUCTIONS,
+                input=json.dumps(
+                    {
+                        "channel_focus": focus,
+                        "target_minutes": target,
+                        "source": _source_payload(source),
+                        "required_missing_chapter_indexes": sorted(missing_indexes),
+                        "missing_chapters": [
+                            _chapter_payload(chapter) for chapter in missing_chapters
+                        ],
+                        "existing_narration_sections": [
+                            {
+                                "chapter_index": index,
+                                "narration": sections[index].narration,
+                            }
+                            for index in sorted(sections)
+                        ],
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                text_format=OpenAIYouTubeNarrationSupplementResponse,
+            )
+            supplement = _parsed_output(
+                supplement_response,
+                "OpenAI response did not contain parsed narration supplements",
+            )
+            supplied = _sections_by_index(
+                supplement.narration_sections,
+                allowed_indexes=missing_indexes,
+                context="narration supplement response",
+            )
+            still_missing = missing_indexes - set(supplied)
+            if still_missing:
+                raise ValueError(
+                    "narration supplement is missing chapter indexes: "
+                    + ", ".join(str(index) for index in sorted(still_missing))
+                )
+            sections.update(supplied)
         script = YouTubeScript(
             title=source.selected_title,
             thumbnail_text=source.selected_thumbnail_text,
@@ -209,10 +361,10 @@ class OpenAIYouTubeScriptGenerator:
             chapters=chapters,
             narration_sections=[
                 YouTubeNarrationSection(
-                    chapter_index=section.chapter_index,
-                    narration=section.narration,
+                    chapter_index=index,
+                    narration=sections[index].narration,
                 )
-                for section in parsed.narration_sections
+                for index in sorted(sections)
             ],
             closing=parsed.closing,
             seo_keywords=source.seo_keywords,
