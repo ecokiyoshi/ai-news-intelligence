@@ -117,7 +117,7 @@ with `OPENAI_MODEL` or the constructor's `model` argument:
 
 ```bash
 export OPENAI_API_KEY="<your-key>"
-export OPENAI_MODEL="gpt-5.6"
+export OPENAI_MODEL="gpt-5.5"
 ```
 
 Never commit an API key or a populated `.env` file. The tracked `.env.example` contains only empty
@@ -133,7 +133,7 @@ from app.openai_summarizer import OpenAISummarizer
 from app.summarization import summarize_article
 
 client = OpenAI(timeout=30.0)
-summarizer = OpenAISummarizer(client=client, model="gpt-5.6")
+summarizer = OpenAISummarizer(client=client, model="gpt-5.5")
 
 with Session(engine) as session:
     article = session.get(NewsArticle, 1)

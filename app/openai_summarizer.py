@@ -7,7 +7,7 @@ from openai import OpenAI
 
 from app.summarization import EmptySummaryResultError, SummaryResult
 
-DEFAULT_OPENAI_MODEL = "gpt-5.6"
+DEFAULT_OPENAI_MODEL = "gpt-5.5"
 SUMMARY_INSTRUCTIONS = """\
 Summarize only the supplied article text. Be factual and concise, and do not invent information.
 Preserve important names, organizations, dates, and numbers. Keep the input language when possible.
