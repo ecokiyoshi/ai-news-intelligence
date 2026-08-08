@@ -68,6 +68,14 @@ def parse_image_size(size: str) -> tuple[int, int]:
     )
 
 
+def validate_image_size(size: str) -> str:
+    """Validate the public image size format and required 16:9 geometry."""
+
+    width, height = parse_image_size(size)
+    _validate_dimensions(width, height)
+    return size.strip()
+
+
 def _validate_dimensions(
     width: int,
     height: int,

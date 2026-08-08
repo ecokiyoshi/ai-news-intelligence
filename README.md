@@ -74,6 +74,68 @@ The runtime handles SIGTERM/SIGINT, stops the existing scheduler gracefully, and
 stdout/stderr. Invalid configuration exits non-zero so the restart policy can respond. No source
 tree, Docker socket, privileged mode, or host network is mounted.
 
+### End-to-end production pipeline
+
+Set `PIPELINE_MODE=end_to_end` to make the same scheduled runner perform the complete production
+flow: RSS collection and persistence → news summarization/scoring/ranking → priority selection →
+YouTube ideas → Potential scoring/ranking → title/thumbnail packaging evaluation → outline and
+15-minute script → さび助×ハル dialogue → 16:9 visual plan → scene image generation. The
+provider-independent orchestrator reuses the existing services and fails before YouTube providers
+when no priority news is available. `PIPELINE_MODE=news` preserves the earlier news-only scheduler.
+
+Required and bounded settings are documented in `.env.example`:
+
+```dotenv
+PIPELINE_MODE=end_to_end
+PIPELINE_NEWS_LIMIT=10
+YOUTUBE_CHANNEL_FOCUS=AI industry explanations
+YOUTUBE_IDEA_COUNT=3
+YOUTUBE_PACKAGING_COUNT=5
+YOUTUBE_TARGET_MINUTES=15
+YOUTUBE_SCENE_LIMIT=50
+YOUTUBE_IMAGE_SIZE=1792x1024
+```
+
+`SCHEDULER_PROVIDER=local` follows the entire route deterministically, needs no API key, and writes
+valid placeholder PNGs. `SCHEDULER_PROVIDER=openai` connects every existing OpenAI text adapter and
+the existing Images API adapter. It requires `OPENAI_API_KEY`, respects `OPENAI_MODEL` and
+`OPENAI_IMAGE_MODEL`, and generates production scene images. Text calls and every selected scene
+image may incur charges. `YOUTUBE_SCENE_LIMIT` is a hard pre-call cost guard; an oversized visual
+plan fails before any image request. Never commit the key or populated `.env`.
+
+Run the configured composition once without starting the interval scheduler:
+
+```bash
+docker compose run --rm scheduler python -m app.runtime run-once
+```
+
+The command exits zero only after all selected images, `manifest.json`, and `run.json` have been
+written. A provider, validation, empty-priority-news, or image failure exits non-zero. Scheduled
+execution uses the exact same runner; inspect failures with `docker compose logs -f scheduler`.
+
+Every successful run receives a collision-resistant UTC directory under the persistent
+`generated_outputs` volume:
+
+```text
+/data/outputs/<run-id>/
+├── scene_000.png
+├── scene_001.png
+├── ...
+├── manifest.json
+└── run.json
+```
+
+`manifest.json` is created only after all selected images succeed. `run.json` atomically records
+the news counts and priority items, source article IDs, selected idea/Potential/packaging, script,
+dialogue, visual plan, image/file metadata, and safe provider/model names. It never stores API keys,
+authorization headers, or an environment dump. Partial image failure retains the existing retry and
+partial-file behavior but produces no successful manifest or `run.json`; completed run directories
+are never overwritten.
+
+Database state and run outputs remain in the existing named volumes. The scheduler remains one
+foreground PID 1 service with overlap protection and graceful shutdown. Do not scale it beyond one
+replica: no distributed lock is provided, and duplicate paid pipeline runs could occur.
+
 ## Local setup
 
 Create and activate a virtual environment:

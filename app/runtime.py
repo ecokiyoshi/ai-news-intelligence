@@ -9,7 +9,7 @@ import math
 import os
 import signal
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from openai import OpenAI
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
@@ -25,10 +26,46 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.database import create_db_engine, init_db
 from app.openai_scorer import OpenAIScorer
 from app.openai_summarizer import OpenAISummarizer
+from app.openai_youtube_dialogue import OpenAIYouTubeDialogueConverter
+from app.openai_youtube_ideas import OpenAIYouTubeIdeaGenerator
+from app.openai_youtube_image_generation import (
+    OPENAI_SUPPORTED_IMAGE_SIZES,
+    OpenAISceneImageGenerator,
+)
+from app.openai_youtube_packaging import (
+    OpenAIYouTubePackagingEvaluator,
+    OpenAIYouTubePackagingGenerator,
+)
+from app.openai_youtube_potential import OpenAIYouTubePotentialScorer
+from app.openai_youtube_script import (
+    OpenAIYouTubeOutlineGenerator,
+    OpenAIYouTubeScriptGenerator,
+)
+from app.openai_youtube_visuals import OpenAIYouTubeVisualPlanner
 from app.pipeline import MetadataTextProvider
+from app.production_pipeline import (
+    ProductionPipelineResult,
+    ProductionProviders,
+    run_production_pipeline,
+)
 from app.scheduler import NewsPipelineScheduler, build_pipeline_runner
 from app.scoring import LocalScorer
 from app.summarization import LocalSummarizer
+from app.youtube_dialogue import LocalYouTubeDialogueConverter
+from app.youtube_ideas import MAX_IDEA_COUNT, LocalYouTubeIdeaGenerator
+from app.youtube_image_generation import LocalSceneImageGenerator, validate_image_size
+from app.youtube_packaging import (
+    MAX_PACKAGING_CANDIDATES,
+    LocalYouTubePackagingEvaluator,
+    LocalYouTubePackagingGenerator,
+)
+from app.youtube_potential import LocalYouTubePotentialScorer
+from app.youtube_script import (
+    LocalYouTubeOutlineGenerator,
+    LocalYouTubeScriptGenerator,
+    validate_target_minutes,
+)
+from app.youtube_visuals import LocalYouTubeVisualPlanner
 
 logger = logging.getLogger(__name__)
 RUNTIME_MARKER = "scheduler-runtime.json"
@@ -46,6 +83,14 @@ class RuntimeConfig:
     relevance_target: str
     interval_seconds: float
     provider: str
+    pipeline_mode: str
+    news_limit: int
+    channel_focus: str
+    idea_count: int
+    packaging_count: int
+    target_minutes: int
+    scene_limit: int
+    image_size: str
 
     @classmethod
     def from_env(
@@ -85,13 +130,53 @@ class RuntimeConfig:
         provider = values.get("SCHEDULER_PROVIDER", "local").strip().lower()
         if provider not in {"local", "openai"}:
             raise ValueError("SCHEDULER_PROVIDER must be 'local' or 'openai'")
-        if provider == "openai" and not values.get("OPENAI_API_KEY", "").strip():
+        if (
+            require_pipeline
+            and provider == "openai"
+            and not values.get("OPENAI_API_KEY", "").strip()
+        ):
             raise ValueError("OPENAI_API_KEY is required when SCHEDULER_PROVIDER=openai")
+
+        pipeline_mode = values.get("PIPELINE_MODE", "news").strip().lower()
+        if pipeline_mode not in {"news", "end_to_end"}:
+            raise ValueError("PIPELINE_MODE must be 'news' or 'end_to_end'")
+
+        def positive_integer(name: str, default: str) -> int:
+            raw = values.get(name, default)
+            try:
+                parsed = int(raw)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"{name} must be a positive integer") from error
+            if isinstance(raw, bool) or parsed <= 0 or str(parsed) != str(raw).strip():
+                raise ValueError(f"{name} must be a positive integer")
+            return parsed
+
+        news_limit = positive_integer("PIPELINE_NEWS_LIMIT", "10")
+        idea_count = positive_integer("YOUTUBE_IDEA_COUNT", "3")
+        if idea_count > MAX_IDEA_COUNT:
+            raise ValueError(f"YOUTUBE_IDEA_COUNT must not exceed {MAX_IDEA_COUNT}")
+        packaging_count = positive_integer("YOUTUBE_PACKAGING_COUNT", "5")
+        if packaging_count > MAX_PACKAGING_CANDIDATES:
+            raise ValueError(
+                f"YOUTUBE_PACKAGING_COUNT must not exceed {MAX_PACKAGING_CANDIDATES}"
+            )
+        target_minutes = validate_target_minutes(
+            positive_integer("YOUTUBE_TARGET_MINUTES", "15")
+        )
+        scene_limit = positive_integer("YOUTUBE_SCENE_LIMIT", "50")
+        image_size = validate_image_size(
+            values.get("YOUTUBE_IMAGE_SIZE", "1792x1024")
+        )
+        if provider == "openai" and image_size not in OPENAI_SUPPORTED_IMAGE_SIZES:
+            raise ValueError("YOUTUBE_IMAGE_SIZE is not supported by the OpenAI image provider")
+        channel_focus = values.get("YOUTUBE_CHANNEL_FOCUS", "").strip()
         if require_pipeline:
             if not feed_urls:
                 raise ValueError("SCHEDULER_FEED_URLS must contain at least one URL")
             if not relevance_target:
                 raise ValueError("SCHEDULER_RELEVANCE_TARGET must not be empty")
+            if pipeline_mode == "end_to_end" and not channel_focus:
+                raise ValueError("YOUTUBE_CHANNEL_FOCUS is required for end_to_end mode")
 
         return cls(
             data_dir=data_dir,
@@ -102,6 +187,14 @@ class RuntimeConfig:
             relevance_target=relevance_target,
             interval_seconds=interval_seconds,
             provider=provider,
+            pipeline_mode=pipeline_mode,
+            news_limit=news_limit,
+            channel_focus=channel_focus,
+            idea_count=idea_count,
+            packaging_count=packaging_count,
+            target_minutes=target_minutes,
+            scene_limit=scene_limit,
+            image_size=image_size,
         )
 
 
@@ -129,27 +222,80 @@ def prepare_runtime(config: RuntimeConfig) -> None:
         engine.dispose()
 
 
-def build_runtime_scheduler(config: RuntimeConfig) -> NewsPipelineScheduler:
-    """Compose the existing pipeline and scheduler with configured providers."""
+def build_runtime_runner(config: RuntimeConfig) -> Callable[[], object]:
+    """Build the configured one-run callable shared by scheduled and one-shot execution."""
 
     engine = create_db_engine(config.database_url)
     sessions = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     if config.provider == "openai":
-        summarizer = OpenAISummarizer()
-        scorer = OpenAIScorer()
+        client = OpenAI()
+        providers = ProductionProviders(
+            summarizer=OpenAISummarizer(client=client),
+            news_scorer=OpenAIScorer(client=client),
+            text_provider=MetadataTextProvider(),
+            idea_generator=OpenAIYouTubeIdeaGenerator(client=client),
+            potential_scorer=OpenAIYouTubePotentialScorer(client=client),
+            packaging_generator=OpenAIYouTubePackagingGenerator(client=client),
+            packaging_evaluator=OpenAIYouTubePackagingEvaluator(client=client),
+            outline_generator=OpenAIYouTubeOutlineGenerator(client=client),
+            script_generator=OpenAIYouTubeScriptGenerator(client=client),
+            dialogue_converter=OpenAIYouTubeDialogueConverter(client=client),
+            visual_planner=OpenAIYouTubeVisualPlanner(client=client),
+            image_generator=OpenAISceneImageGenerator(client=client),
+        )
     else:
-        summarizer = LocalSummarizer()
-        scorer = LocalScorer()
-    runner = build_pipeline_runner(
-        sessions,
-        config.feed_urls,
-        config.relevance_target,
-        summarizer,
-        scorer,
-        MetadataTextProvider(),
-    )
+        providers = ProductionProviders(
+            summarizer=LocalSummarizer(),
+            news_scorer=LocalScorer(),
+            text_provider=MetadataTextProvider(),
+            idea_generator=LocalYouTubeIdeaGenerator(),
+            potential_scorer=LocalYouTubePotentialScorer(),
+            packaging_generator=LocalYouTubePackagingGenerator(),
+            packaging_evaluator=LocalYouTubePackagingEvaluator(),
+            outline_generator=LocalYouTubeOutlineGenerator(),
+            script_generator=LocalYouTubeScriptGenerator(),
+            dialogue_converter=LocalYouTubeDialogueConverter(),
+            visual_planner=LocalYouTubeVisualPlanner(),
+            image_generator=LocalSceneImageGenerator(),
+        )
+    if config.pipeline_mode == "news":
+        return build_pipeline_runner(
+            sessions,
+            config.feed_urls,
+            config.relevance_target,
+            providers.summarizer,
+            providers.news_scorer,
+            providers.text_provider,
+            limit=config.news_limit,
+        )
+
+    def production_runner() -> ProductionPipelineResult:
+        with sessions() as session:
+            return run_production_pipeline(
+                config.feed_urls,
+                config.relevance_target,
+                config.channel_focus,
+                providers,
+                session,
+                output_root=config.output_dir,
+                news_limit=config.news_limit,
+                idea_count=config.idea_count,
+                packaging_count=config.packaging_count,
+                target_minutes=config.target_minutes,
+                scene_limit=config.scene_limit,
+                image_size=config.image_size,
+            )
+
+    return production_runner
+
+
+def build_runtime_scheduler(
+    config: RuntimeConfig, runner: Callable[[], object] | None = None
+) -> NewsPipelineScheduler:
+    """Wrap the shared configured runner in the existing scheduler."""
+
     return NewsPipelineScheduler(
-        runner,
+        runner or build_runtime_runner(config),  # type: ignore[arg-type]
         interval_seconds=config.interval_seconds,
         scheduler_backend=BackgroundScheduler(timezone=ZoneInfo(config.timezone)),
     )
@@ -192,7 +338,9 @@ def serve_scheduler(
     try:
         scheduler.start()
         logger.info(
-            "Scheduler runtime started timezone=%s provider=%s cadence_seconds=%s output_root=%s",
+            "Scheduler runtime started mode=%s timezone=%s provider=%s cadence_seconds=%s "
+            "output_root=%s",
+            config.pipeline_mode,
             config.timezone,
             config.provider,
             config.interval_seconds,
@@ -231,16 +379,23 @@ def healthcheck(config: RuntimeConfig) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", nargs="?", choices=("run", "health"), default="run")
+    parser.add_argument(
+        "command", nargs="?", choices=("run", "run-once", "health"), default="run"
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
     try:
-        config = RuntimeConfig.from_env(require_pipeline=args.command == "run")
+        config = RuntimeConfig.from_env(require_pipeline=args.command != "health")
         if args.command == "health":
             healthcheck(config)
             return 0
         prepare_runtime(config)
-        serve_scheduler(build_runtime_scheduler(config), config)
+        runner = build_runtime_runner(config)
+        if args.command == "run-once":
+            runner()
+            logger.info("One-shot pipeline completed mode=%s", config.pipeline_mode)
+            return 0
+        serve_scheduler(build_runtime_scheduler(config, runner), config)
         return 0
     except Exception as error:
         logger.error("Runtime failed (%s): %s", type(error).__name__, error)
