@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 
@@ -47,3 +47,7 @@ class NewsArticle(Base):
     )
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     summarized_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    importance_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    relevance_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    score_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scored_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
