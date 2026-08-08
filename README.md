@@ -444,6 +444,44 @@ is not measured YouTube or Google search volume, Google Trends data, CTR, audien
 prediction. Potential results are not persisted, and this feature adds no trends integration,
 clustering, script generation, or database schema changes.
 
+## Similar-news clustering
+
+Similar-news clustering groups multiple outlets' reports of substantially the same underlying
+event before downstream YouTube idea generation. It does not merge stories merely because they
+share a broad topic: reports about the same DJI launch can be grouped, while a DJI launch and a
+separate drone regulation story remain distinct.
+
+`build_news_cluster_sources` combines existing `RankingResult` values with matching `NewsArticle`
+records. It copies the existing priority score without recalculating it. `cluster_priority_news`
+then validates that every input article appears in exactly one cluster and chooses each
+representative deterministically by priority, importance, relevance, publication time, and article
+ID.
+
+```python
+from app.news_clustering import (
+    LocalNewsClusterer,
+    build_news_cluster_sources,
+    cluster_priority_news,
+)
+
+sources = build_news_cluster_sources(priority_articles, articles)
+clusters = cluster_priority_news(
+    sources,
+    LocalNewsClusterer(),
+    topic_focus="drone technology and regulation",
+)
+```
+
+`LocalNewsClusterer` is a deterministic development heuristic that groups titles only when they
+match after lowercase, whitespace, and basic punctuation normalization. It does not provide full
+semantic equivalence detection. `OpenAINewsClusterer` can be injected for model-based same-event
+grouping and uses Responses API typed structured output; real calls may incur charges.
+
+The default maximum input is 50 articles to guard against accidental large provider calls. This
+implementation performs no batching and does not persist clusters. It adds no embeddings, vector
+database, semantic search infrastructure, or DB schema changes. Never commit `OPENAI_API_KEY` or a
+populated environment file.
+
 ## Run tests
 
 ```bash
