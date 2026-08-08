@@ -216,6 +216,44 @@ with Session(engine) as session:
 Real OpenAI API calls may incur charges. Never commit `OPENAI_API_KEY`, a populated `.env`, or
 other credentials. Tests use injected fake clients and never contact the OpenAI API.
 
+## News ranking
+
+News ranking uses already stored scores to calculate a deterministic derived value:
+
+```text
+priority_score = importance_score × 0.6 + relevance_score × 0.4
+```
+
+The default weights are 60% importance and 40% relevance. Both weights can be configured, but each
+must be between 0 and 1 and together they must equal 1. Articles missing either stored score are
+excluded. The priority score is calculated when requested and is not stored in the database.
+
+```python
+from sqlalchemy.orm import Session
+
+from app.database import engine
+from app.ranking import (
+    get_rankable_articles,
+    rank_articles,
+    select_priority_articles,
+)
+
+with Session(engine) as session:
+    articles = get_rankable_articles(session)
+
+    all_ranked = rank_articles(articles)
+    priority_articles = select_priority_articles(
+        articles,
+        limit=10,
+        minimum_priority_score=80,
+        max_per_source=2,
+    )
+```
+
+`minimum_priority_score` filters out lower-priority results, while `max_per_source` optionally
+limits how many selected articles can come from one source. Ranking makes no additional OpenAI API
+calls, so it adds no OpenAI API usage charges.
+
 ## Run tests
 
 ```bash
