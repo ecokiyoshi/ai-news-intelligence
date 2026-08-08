@@ -6,6 +6,74 @@ Backend foundation for AI News Intelligence, built with Python and FastAPI.
 
 - Python 3.12 or newer
 
+## Docker deployment and persistent scheduler operation
+
+The Docker image runs the existing `NewsPipelineScheduler` as the foreground PID 1 process. Docker
+Compose provides persistent named volumes for SQLite/state and generated outputs, a local-only
+healthcheck, and `restart: unless-stopped`. It does not add cron or another scheduler.
+
+Prerequisites are Docker and the Docker Compose plugin. Create local configuration first:
+
+```bash
+cp .env.example .env
+```
+
+Set `SCHEDULER_FEED_URLS` to a comma-separated list and set
+`SCHEDULER_RELEVANCE_TARGET`. `SCHEDULER_PROVIDER=local` is deterministic and needs neither an API
+key nor OpenAI network access. Set it to `openai` only when `OPENAI_API_KEY` is configured; real API
+calls may incur charges. Never commit `.env` or an API key.
+
+Start and inspect the service:
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose logs -f scheduler
+```
+
+`docker compose ps` reports the health status. The healthcheck verifies that the scheduler PID
+marker is live, the state/output directories are writable, and the configured database accepts a
+local query. It never contacts RSS feeds, OpenAI, or another paid service.
+
+Common operations:
+
+```bash
+docker compose restart scheduler
+docker compose down
+# After pulling code changes:
+docker compose up -d --build
+```
+
+Normal `docker compose down` keeps the `app_data` and `generated_outputs` named volumes. Running
+`docker compose down -v` deletes both volumes and their data. Stop the scheduler before a backup or
+restore, and back up both volumes so the SQLite database/state, scene images, and `manifest.json`
+remain consistent. `docker volume ls` can be used to identify their Compose-prefixed names.
+For a persistence smoke check, create a harmless marker in each mounted path, restart the scheduler,
+then perform `docker compose down` followed by `docker compose up -d`; both markers should remain.
+
+The container paths and configuration precedence are:
+
+- `DATABASE_URL` explicitly selects the database. If omitted, the runtime derives a SQLite URL
+  from `APP_DATA_DIR` (`/data/state` in Compose).
+- `OUTPUT_DIR` is `/data/outputs` in Compose. It is the persistent root available to callers of the
+  existing image-generation service; that service still receives its output directory explicitly.
+- `SCHEDULER_INTERVAL_SECONDS` controls the interval cadence. `TZ` defaults to `Asia/Tokyo` in the
+  Compose example; interval scheduling is elapsed-time based rather than a wall-clock cron time.
+- `OPENAI_MODEL` and `OPENAI_IMAGE_MODEL` retain the existing provider model overrides.
+
+The deployment assumes exactly one scheduler container. **Do not scale `scheduler` above one
+replica:** there is no distributed lock, so multiple replicas may execute duplicate jobs.
+
+An existing one-shot database initialization command can also run inside the image:
+
+```bash
+docker compose run --rm scheduler python -c "from app.database import init_db; init_db()"
+```
+
+The runtime handles SIGTERM/SIGINT, stops the existing scheduler gracefully, and logs to
+stdout/stderr. Invalid configuration exits non-zero so the restart policy can respond. No source
+tree, Docker socket, privileged mode, or host network is mounted.
+
 ## Local setup
 
 Create and activate a virtual environment:

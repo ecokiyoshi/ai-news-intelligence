@@ -161,6 +161,8 @@ venv.bak/
 *.db
 *.sqlite
 *.sqlite3
+runtime-data/
+generated-outputs/
 
 # Spyder project settings
 .spyderproject
