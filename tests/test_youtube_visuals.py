@@ -12,6 +12,7 @@ from app.youtube_visuals import (
     YouTubeVisualScene,
     build_youtube_visual_source,
     generate_youtube_visual_plan,
+    validate_scene_limit,
     validate_line_reference,
     validate_visual_plan,
 )
@@ -123,8 +124,8 @@ def test_all_supported_visual_types_accepted(visual_type: str) -> None:
 
 def test_local_planner_is_deterministic_uses_coherent_multi_line_scenes() -> None:
     planner = LocalYouTubeVisualPlanner()
-    first = planner.plan(source(), channel_focus="AI news")
-    second = planner.plan(source(), channel_focus="AI news")
+    first = planner.plan(source(), channel_focus="AI news", scene_limit=10)
+    second = planner.plan(source(), channel_focus="AI news", scene_limit=10)
     assert first == second
     assert [item.scene_index for item in first.scenes] == list(range(5))
     assert all(item.aspect_ratio == ASPECT_RATIO for item in first.scenes)
@@ -137,8 +138,26 @@ def test_local_planner_is_deterministic_uses_coherent_multi_line_scenes() -> Non
     assert covered == {0, 1, 2}
 
 
+def test_local_planner_compacts_adjacent_scenes_to_limit_with_full_coverage() -> None:
+    plan = LocalYouTubeVisualPlanner().plan(
+        source(), channel_focus="AI news", scene_limit=3
+    )
+
+    assert len(plan.scenes) == 3
+    assert [scene.scene_index for scene in plan.scenes] == [0, 1, 2]
+    covered = {
+        ref.chapter_index
+        for scene in plan.scenes
+        for ref in scene.source_refs
+        if ref.section == "chapter"
+    }
+    assert covered == {0, 1, 2}
+
+
 def test_visual_plan_rejects_missing_chapter_coverage() -> None:
-    plan = LocalYouTubeVisualPlanner().plan(source(), channel_focus="AI")
+    plan = LocalYouTubeVisualPlanner().plan(
+        source(), channel_focus="AI", scene_limit=10
+    )
     without_chapter = [item for item in plan.scenes if not any(
         ref.section == "chapter" and ref.chapter_index == 1 for ref in item.source_refs
     )]
@@ -148,13 +167,17 @@ def test_visual_plan_rejects_missing_chapter_coverage() -> None:
 
 
 def test_visual_plan_rejects_nonsequential_scene_indexes() -> None:
-    plan = LocalYouTubeVisualPlanner().plan(source(), channel_focus="AI")
+    plan = LocalYouTubeVisualPlanner().plan(
+        source(), channel_focus="AI", scene_limit=10
+    )
     with pytest.raises(ValueError, match="scene indexes"):
         validate_visual_plan(replace(plan, scenes=[replace(plan.scenes[0], scene_index=2), *plan.scenes[1:]]), source())
 
 
 def test_visual_plan_rejects_chronology_reversal() -> None:
-    plan = LocalYouTubeVisualPlanner().plan(source(), channel_focus="AI")
+    plan = LocalYouTubeVisualPlanner().plan(
+        source(), channel_focus="AI", scene_limit=10
+    )
     scenes = list(plan.scenes)
     scenes[2], scenes[3] = replace(scenes[3], scene_index=2), replace(scenes[2], scene_index=3)
     with pytest.raises(ValueError, match="chronology"):
@@ -169,12 +192,31 @@ def test_service_rejects_empty_focus_before_planner() -> None:
     class Never:
         def plan(self, *args, **kwargs): raise AssertionError("planner called")
     with pytest.raises(ValueError):
-        generate_youtube_visual_plan(dialogue_script(), Never(), channel_focus=" ")
+        generate_youtube_visual_plan(
+            dialogue_script(), Never(), channel_focus=" ", scene_limit=10
+        )
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5])
+def test_invalid_scene_limit_rejected_before_planner(limit) -> None:
+    class Never:
+        def plan(self, *args, **kwargs):
+            raise AssertionError("planner called")
+
+    with pytest.raises(ValueError, match="scene_limit"):
+        generate_youtube_visual_plan(
+            dialogue_script(), Never(), channel_focus="AI", scene_limit=limit
+        )
+    with pytest.raises(ValueError, match="scene_limit"):
+        validate_scene_limit(limit)
 
 
 def test_end_to_end_local_visual_plan() -> None:
     plan = generate_youtube_visual_plan(
-        dialogue_script(), LocalYouTubeVisualPlanner(), channel_focus="AI news"
+        dialogue_script(),
+        LocalYouTubeVisualPlanner(),
+        channel_focus="AI news",
+        scene_limit=10,
     )
     assert isinstance(plan, YouTubeVisualPlan)
     assert plan.title == dialogue_script().title
