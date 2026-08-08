@@ -5,6 +5,7 @@ import pytest
 
 from app.openai_youtube_script import (
     OpenAIYouTubeNarrationSection,
+    OpenAIYouTubeNarrationSupplementResponse,
     OpenAIYouTubeOutlineResponse,
     OpenAIYouTubeScriptChapter,
     OpenAIYouTubeScriptGenerator,
@@ -51,6 +52,26 @@ class FakeClient:
         self.responses = FakeResponses(parsed, error)
 
 
+class SequencedResponses:
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = []
+
+    def parse(self, **kwargs):
+        self.calls.append(kwargs)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return SimpleNamespace(output=[SimpleNamespace(
+            type="message", content=[SimpleNamespace(parsed=result)]
+        )])
+
+
+class SequencedClient:
+    def __init__(self, results):
+        self.responses = SequencedResponses(results)
+
+
 def openai_chapter(index: int, seconds: int = 450, **overrides):
     values = dict(chapter_index=index, title=f"Chapter {index}",
                   objective="Explain supplied context", estimated_seconds=seconds,
@@ -78,6 +99,7 @@ def test_openai_outline_uses_typed_responses_api_and_complete_context() -> None:
     )
     chapters = generator.generate_outline(source(), channel_focus="AI news", target_minutes=15)
     assert [x.chapter_index for x in chapters] == [0, 1]
+    assert sum(x.estimated_seconds for x in chapters) == 15 * 60
     call = client.responses.calls[0]
     assert call["model"] == "outline-model"
     assert call["text_format"] is OpenAIYouTubeOutlineResponse
@@ -88,6 +110,16 @@ def test_openai_outline_uses_typed_responses_api_and_complete_context() -> None:
         "AI industry viewers", "Background", "AI model", "12.345", "67.891",
     ):
         assert expected in call["input"]
+
+
+def test_openai_outline_normalizes_provider_duration_proportionally() -> None:
+    parsed = OpenAIYouTubeOutlineResponse(
+        chapters=[openai_chapter(0, 100), openai_chapter(1, 200)]
+    )
+    chapters = OpenAIYouTubeOutlineGenerator(client=FakeClient(parsed)).generate_outline(
+        source(), channel_focus="AI", target_minutes=15
+    )
+    assert [chapter.estimated_seconds for chapter in chapters] == [300, 600]
 
 
 def test_openai_script_uses_typed_response_and_outline_context() -> None:
@@ -112,6 +144,81 @@ def test_openai_script_uses_typed_response_and_outline_context() -> None:
     assert '"chapter_index":0' in call["input"]
     assert "Explain context" in call["input"]
     assert "67.891" in call["input"]
+    assert '"english_words_minimum":1800' in call["input"]
+    assert '"english_words_maximum":2700' in call["input"]
+    assert '"japanese_non_whitespace_characters_minimum":3360' in call["input"]
+    assert '"japanese_non_whitespace_characters_maximum":5040' in call["input"]
+    assert '"target_english_words":1125' in call["input"]
+    assert len(client.responses.calls) == 1
+
+
+def test_openai_script_supplements_only_missing_chapters() -> None:
+    existing = narration(0)
+    missing = narration(1)
+    client = SequencedClient([
+        OpenAIYouTubeScriptResponse(
+            opening_hook="Opening hook",
+            narration_sections=[existing],
+            closing="Final takeaway",
+        ),
+        OpenAIYouTubeNarrationSupplementResponse(narration_sections=[missing]),
+    ])
+    script = OpenAIYouTubeScriptGenerator(client=client).generate_script(
+        source(), [chapter(0), chapter(1)], channel_focus="AI", target_minutes=15
+    )
+    assert [section.chapter_index for section in script.narration_sections] == [0, 1]
+    assert script.narration_sections[0].narration == existing.narration.strip()
+    assert len(client.responses.calls) == 2
+    supplement_call = client.responses.calls[1]
+    assert supplement_call["text_format"] is OpenAIYouTubeNarrationSupplementResponse
+    assert '"required_missing_chapter_indexes":[1]' in supplement_call["input"]
+    assert '"chapter_index":0' in supplement_call["input"]
+    assert '"chapter_index":1' in supplement_call["input"]
+
+
+def test_openai_script_rejects_unrequested_supplement_chapter() -> None:
+    client = SequencedClient([
+        OpenAIYouTubeScriptResponse(
+            opening_hook="Opening",
+            narration_sections=[narration(0)],
+            closing="Closing",
+        ),
+        SimpleNamespace(narration_sections=[narration(2)]),
+    ])
+    with pytest.raises(ValueError, match="unexpected chapter_index: 2"):
+        OpenAIYouTubeScriptGenerator(client=client).generate_script(
+            source(), [chapter(0), chapter(1)], channel_focus="AI", target_minutes=15
+        )
+
+
+def test_openai_script_reports_chapter_still_missing_after_supplement() -> None:
+    client = SequencedClient([
+        OpenAIYouTubeScriptResponse(
+            opening_hook="Opening",
+            narration_sections=[narration(0)],
+            closing="Closing",
+        ),
+        SimpleNamespace(narration_sections=[]),
+    ])
+    with pytest.raises(ValueError, match="missing chapter indexes: 1"):
+        OpenAIYouTubeScriptGenerator(client=client).generate_script(
+            source(), [chapter(0), chapter(1)], channel_focus="AI", target_minutes=15
+        )
+
+
+def test_openai_script_propagates_supplement_provider_error() -> None:
+    client = SequencedClient([
+        OpenAIYouTubeScriptResponse(
+            opening_hook="Opening",
+            narration_sections=[narration(0)],
+            closing="Closing",
+        ),
+        RuntimeError("supplement unavailable"),
+    ])
+    with pytest.raises(RuntimeError, match="supplement unavailable"):
+        OpenAIYouTubeScriptGenerator(client=client).generate_script(
+            source(), [chapter(0), chapter(1)], channel_focus="AI", target_minutes=15
+        )
 
 
 @pytest.mark.parametrize("chapters", [
