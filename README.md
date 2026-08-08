@@ -79,6 +79,36 @@ Entries without a title, URL, or usable source are skipped. The entry's source t
 available; otherwise the feed title is used. Duplicate URLs and unavailable or malformed feeds do
 not stop the remaining entries and feeds from being processed.
 
+## Summarization service
+
+The provider-independent summarization service accepts an existing article, explicit article text,
+an injected summarizer, and a database session. `LocalSummarizer` is a deterministic development
+implementation that normalizes whitespace and returns a fixed-length prefix; it does not use an
+API key or network access.
+
+```python
+from sqlalchemy.orm import Session
+
+from app.database import engine
+from app.models import NewsArticle
+from app.summarization import LocalSummarizer, summarize_article
+
+with Session(engine) as session:
+    article = session.get(NewsArticle, 1)
+    if article is not None:
+        result = summarize_article(
+            article,
+            "Explicit article text to summarize.",
+            LocalSummarizer(),
+            session,
+        )
+        print(result.summary)
+```
+
+Empty or whitespace-only input raises `EmptySummaryInputError` without changing the article.
+Provider failures are rolled back and re-raised. Article titles are not used as an implicit text
+fallback. An OpenAI-backed provider and the OpenAI SDK are intentionally not implemented yet.
+
 ## Run tests
 
 ```bash
