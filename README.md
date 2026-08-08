@@ -550,6 +550,73 @@ editorial heuristics, not measured performance predictions. This feature does no
 generate thumbnail images or scripts, upload to YouTube, fetch analytics/trends, or change the
 database schema.
 
+## 15-minute YouTube outline and script
+
+The script layer turns an already selected idea and packaging option into a structured generic
+news-analysis narration:
+
+```text
+selected idea → selected packaging → chapter outline → narration → complete script
+```
+
+`YouTubeScriptSource` copies the existing idea index, source article IDs, selected title and
+thumbnail text, hook, angle, audience, chapter hints, SEO keywords, YouTube Potential Score, and
+packaging score. Neither score is recalculated. An outline chapter contains its sequential index,
+title, objective, estimated seconds, and key points. The final `YouTubeScript` combines a required
+opening hook, exactly one narration section per chapter, a concise closing, and SEO keywords.
+
+The default target is 15 minutes and may be configured from 5 to 30 minutes. Runtime is
+approximate, not guaranteed: outline seconds must be within ±10% of the target, while text runtime
+uses a simple heuristic of 280 Japanese non-space characters per minute or 150 English words per
+minute with ±20% tolerance. Actual delivery speed, pauses, emphasis, and editing will change the
+finished duration.
+
+```python
+from app.youtube_script import (
+    LocalYouTubeOutlineGenerator,
+    LocalYouTubeScriptGenerator,
+    build_youtube_script_source,
+    generate_youtube_script,
+)
+
+script_source = build_youtube_script_source(
+    selected_ranked_idea,
+    selected_packaging_candidate,
+)
+script = generate_youtube_script(
+    script_source,
+    LocalYouTubeOutlineGenerator(),
+    LocalYouTubeScriptGenerator(),
+    channel_focus="AI industry news",
+    target_minutes=15,
+)
+```
+
+The local providers are deterministic, offline, and API-key free. For OpenAI-backed generation,
+inject separate typed Responses API providers:
+
+```python
+from openai import OpenAI
+
+from app.openai_youtube_script import (
+    OpenAIYouTubeOutlineGenerator,
+    OpenAIYouTubeScriptGenerator,
+)
+
+client = OpenAI()
+outline_generator = OpenAIYouTubeOutlineGenerator(client=client, model="gpt-5.5")
+script_generator = OpenAIYouTubeScriptGenerator(client=client, model="gpt-5.5")
+```
+
+The model can also be selected with `OPENAI_MODEL`. Real calls may incur charges; never commit
+`OPENAI_API_KEY` or a populated `.env`. Generation is grounded only in supplied idea/news metadata:
+there is no automatic web research, article scraping, or permission to fabricate quotes, sources,
+statistics, facts, or unsupported claims.
+
+This issue produces generic narration only. It does not add さび助×ハル character dialogue,
+image prompts or generation, TTS, subtitles, Premiere integration, script persistence, database
+schema changes, YouTube descriptions, or upload/publishing.
+
 ## Run tests
 
 ```bash
