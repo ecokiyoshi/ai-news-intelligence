@@ -482,6 +482,74 @@ implementation performs no batching and does not persist clusters. It adds no em
 database, semantic search infrastructure, or DB schema changes. Never commit `OPENAI_API_KEY` or a
 populated environment file.
 
+## YouTube title and thumbnail packaging
+
+This layer turns an existing top-ranked `YouTubeIdea` and its `YouTubePotentialResult` into
+ranked title/thumbnail-copy options without recalculating the existing potential score:
+
+```text
+top YouTube idea → packaging source → title/thumbnail drafts → dimension evaluation
+→ core packaging score → ranked candidates → top packaging options
+```
+
+Each candidate must have exactly one index from `0` through `candidate_count - 1` (the default is
+5 and the maximum is 10). A normalized duplicate title/thumbnail pair is rejected. Providers only
+generate copy or evaluate five 0–100 dimensions; provider-independent core code calculates:
+
+```text
+packaging_score =
+    clarity × 0.20
+    + curiosity × 0.25
+    + specificity × 0.20
+    + truthfulness × 0.25
+    + thumbnail_synergy × 0.10
+```
+
+Weights may be configured, but each must be finite and between 0 and 1 and their sum must be 1.
+Ties are resolved deterministically by truthfulness, curiosity, clarity, then candidate index.
+
+```python
+from app.youtube_packaging import (
+    LocalYouTubePackagingEvaluator,
+    LocalYouTubePackagingGenerator,
+    build_youtube_packaging_source,
+    generate_youtube_packaging,
+    select_top_packaging_candidates,
+)
+
+packaging_source = build_youtube_packaging_source(top_ranked_idea)
+ranked_candidates = generate_youtube_packaging(
+    packaging_source,
+    LocalYouTubePackagingGenerator(),
+    LocalYouTubePackagingEvaluator(),
+    channel_focus="drone technology and regulation",
+)
+top_options = select_top_packaging_candidates(ranked_candidates, limit=3)
+```
+
+The local providers are deterministic and require no network or API key. For OpenAI-backed use,
+inject the typed Responses API providers:
+
+```python
+from openai import OpenAI
+
+from app.openai_youtube_packaging import (
+    OpenAIYouTubePackagingEvaluator,
+    OpenAIYouTubePackagingGenerator,
+)
+
+client = OpenAI()
+generator = OpenAIYouTubePackagingGenerator(client=client, model="gpt-5.5")
+evaluator = OpenAIYouTubePackagingEvaluator(client=client, model="gpt-5.5")
+```
+
+The model can also be selected with `OPENAI_MODEL`. Real calls may incur API charges; never commit
+`OPENAI_API_KEY` or a populated `.env`. The providers receive only supplied idea metadata and must
+not claim analytics, CTR, views, search volume, trend data, or audience behavior. Scores are
+editorial heuristics, not measured performance predictions. This feature does not persist output,
+generate thumbnail images or scripts, upload to YouTube, fetch analytics/trends, or change the
+database schema.
+
 ## Run tests
 
 ```bash
