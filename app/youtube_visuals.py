@@ -36,6 +36,18 @@ def _nonnegative_integer(name: str, value: int) -> int:
     return value
 
 
+def validate_scene_limit(scene_limit: int) -> int:
+    """Return a positive visual-scene limit, rejecting booleans and invalid integers."""
+
+    if (
+        isinstance(scene_limit, bool)
+        or not isinstance(scene_limit, int)
+        or scene_limit <= 0
+    ):
+        raise ValueError("scene_limit must be a positive integer")
+    return scene_limit
+
+
 def _text_list(name: str, values: list[str], *, allow_empty: bool = False) -> list[str]:
     if not isinstance(values, list) or (not values and not allow_empty):
         qualifier = "a list" if allow_empty else "a non-empty list"
@@ -192,7 +204,7 @@ class YouTubeVisualPlan:
 
 class YouTubeVisualPlanner(Protocol):
     def plan(
-        self, source: YouTubeVisualSource, *, channel_focus: str
+        self, source: YouTubeVisualSource, *, channel_focus: str, scene_limit: int
     ) -> YouTubeVisualPlan: ...
 
 
@@ -308,10 +320,11 @@ class LocalYouTubeVisualPlanner:
     """Deterministic offline planner using one coherent beat per source section/chapter."""
 
     def plan(
-        self, source: YouTubeVisualSource, *, channel_focus: str
+        self, source: YouTubeVisualSource, *, channel_focus: str, scene_limit: int
     ) -> YouTubeVisualPlan:
         source = validate_visual_source(source)
         focus = _required_text("channel_focus", channel_focus)
+        limit = validate_scene_limit(scene_limit)
         scenes = []
 
         def add_scene(
@@ -375,6 +388,48 @@ class LocalYouTubeVisualPlanner:
             ),
             [],
         )
+        if len(scenes) > limit:
+            compacted = []
+            quotient, remainder = divmod(len(scenes), limit)
+            offset = 0
+            for index in range(limit):
+                size = quotient + (1 if index < remainder else 0)
+                group = scenes[offset : offset + size]
+                offset += size
+                concept = "; ".join(scene.visual_concept for scene in group)
+                overlay_text = list(
+                    dict.fromkeys(
+                        text for scene in group for text in scene.overlay_text
+                    )
+                )
+                compacted.append(
+                    YouTubeVisualScene(
+                        scene_index=index,
+                        source_refs=[
+                            ref for scene in group for ref in scene.source_refs
+                        ],
+                        purpose="; ".join(scene.purpose for scene in group),
+                        visual_type=(
+                            group[0].visual_type
+                            if len(group) == 1
+                            else "technical_explainer"
+                        ),
+                        visual_concept=concept,
+                        image_prompt=(
+                            f"{concept}; clear focal subject, balanced visual hierarchy, "
+                            f"clean space for later overlay typography, horizontal 16:9 "
+                            f"YouTube composition, wide cinematic framing, grounded only "
+                            f"in supplied {focus} dialogue"
+                        ),
+                        negative_prompt=(
+                            "no unreadable text, no garbled letters, no duplicate objects, "
+                            "no malformed anatomy, no watermark, no vertical composition"
+                        ),
+                        aspect_ratio=ASPECT_RATIO,
+                        overlay_text=overlay_text,
+                    )
+                )
+            scenes = compacted
         return YouTubeVisualPlan(title=source.title, aspect_ratio=ASPECT_RATIO, scenes=scenes)
 
 
@@ -383,9 +438,19 @@ def generate_youtube_visual_plan(
     planner: YouTubeVisualPlanner,
     *,
     channel_focus: str,
+    scene_limit: int,
 ) -> YouTubeVisualPlan:
     """Create and defensively validate a text-only visual plan; no images are generated."""
 
     source = build_youtube_visual_source(dialogue_script)
     focus = _required_text("channel_focus", channel_focus)
-    return validate_visual_plan(planner.plan(source, channel_focus=focus), source)
+    limit = validate_scene_limit(scene_limit)
+    plan = validate_visual_plan(
+        planner.plan(source, channel_focus=focus, scene_limit=limit), source
+    )
+    actual = len(plan.scenes)
+    if actual > limit:
+        raise ValueError(
+            f"visual plan scene count {actual} exceeds configured scene_limit {limit}"
+        )
+    return plan

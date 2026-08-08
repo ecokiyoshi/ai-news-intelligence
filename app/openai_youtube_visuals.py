@@ -15,6 +15,7 @@ from app.youtube_visuals import (
     YouTubeVisualPlan,
     YouTubeVisualScene,
     YouTubeVisualSource,
+    validate_scene_limit,
     validate_visual_plan,
     validate_visual_source,
 )
@@ -24,7 +25,9 @@ This is visual planning and prompt generation only; do not generate or retrieve 
 the supplied dialogue into coherent visual beats. Do not blindly create one image for every line;
 combine adjacent lines when they share one concept. Preserve source chronology, represent every
 source chapter with at least one scene, and trace every scene to exact supplied dialogue lines. Use
-only supplied factual context. Do not invent facts, statistics, events, organizations, equipment,
+no more than the supplied maximum_scene_count, combining adjacent visual beats as needed while still
+covering every source chapter and preserving chronology. Use only supplied factual context. Do not
+invent facts, statistics, events, organizations, equipment,
 product models, locations, dates, quotes, or outcomes. Choose only one of these visual types:
 character_dialogue, realistic_scene, technical_explainer, infographic, map, timeline, comparison,
 object_closeup, environment, title_card. Create a detailed but concise reusable image prompt with a
@@ -103,18 +106,20 @@ class OpenAIYouTubeVisualPlanner:
         self.model = model or os.getenv("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL
 
     def plan(
-        self, source: YouTubeVisualSource, *, channel_focus: str
+        self, source: YouTubeVisualSource, *, channel_focus: str, scene_limit: int
     ) -> YouTubeVisualPlan:
         source = validate_visual_source(source)
         if not isinstance(channel_focus, str) or not channel_focus.strip():
             raise ValueError("channel_focus must be a non-empty string")
         focus = channel_focus.strip()
+        limit = validate_scene_limit(scene_limit)
         response = self.client.responses.parse(
             model=self.model,
             instructions=YOUTUBE_VISUAL_INSTRUCTIONS,
             input=json.dumps(
                 {
                     "channel_focus": focus,
+                    "maximum_scene_count": limit,
                     "required_aspect_ratio": ASPECT_RATIO,
                     "supported_visual_types": sorted(SUPPORTED_VISUAL_TYPES),
                     "source": {
