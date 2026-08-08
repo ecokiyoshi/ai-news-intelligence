@@ -95,12 +95,44 @@ def test_openai_instructions_require_16_by_9_overlay_and_no_one_line_segmentatio
     assert "long japanese text" in lowered and "overlay text separately" in lowered
     assert "one image for every line" in lowered
     assert "planning and prompt generation only" in lowered
+    assert "scene_index" in lowered and "starting at zero" in lowered
+    assert "increasing consecutively" in lowered
 
 
 def test_openai_reference_schema_rejects_unsupported_section() -> None:
     with pytest.raises(ValidationError):
         OpenAIDialogueLineReference(
             section="intro", chapter_index=None, line_index=0
+        )
+
+
+@pytest.mark.parametrize("kind", ["one_based", "gapped", "duplicate"])
+def test_openai_planner_normalizes_provider_scene_indexes(kind: str) -> None:
+    parsed = valid_response()
+    if kind == "one_based":
+        for index, scene in enumerate(parsed.scenes, start=1):
+            scene.scene_index = index
+    elif kind == "gapped":
+        for index, scene in enumerate(parsed.scenes):
+            scene.scene_index = index * 2
+    else:
+        for scene in parsed.scenes:
+            scene.scene_index = 3
+
+    plan = OpenAIYouTubeVisualPlanner(client=FakeClient(parsed)).plan(
+        source(), channel_focus="AI news"
+    )
+
+    assert [scene.scene_index for scene in plan.scenes] == list(range(len(plan.scenes)))
+
+
+def test_openai_planner_still_rejects_provider_scene_order_reversal() -> None:
+    parsed = valid_response()
+    parsed.scenes[1], parsed.scenes[2] = parsed.scenes[2], parsed.scenes[1]
+
+    with pytest.raises(ValueError, match="chronology"):
+        OpenAIYouTubeVisualPlanner(client=FakeClient(parsed)).plan(
+            source(), channel_focus="AI news"
         )
 
 
