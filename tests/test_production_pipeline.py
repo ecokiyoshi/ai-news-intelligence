@@ -143,11 +143,28 @@ def test_scene_limit_rejects_before_image_provider_call(
         def generate(self, *args, **kwargs):
             raise AssertionError("image provider must not be called")
 
+    class OversizedVisualPlanner:
+        def __init__(self):
+            self.received_limit = None
+
+        def plan(self, source, *, channel_focus, scene_limit):
+            self.received_limit = scene_limit
+            return LocalYouTubeVisualPlanner().plan(
+                source, channel_focus=channel_focus, scene_limit=20
+            )
+
     providers = local_providers()
+    visual_planner = OversizedVisualPlanner()
     providers = ProductionProviders(
-        **{**providers.__dict__, "image_generator": ForbiddenImageGenerator()}
+        **{
+            **providers.__dict__,
+            "visual_planner": visual_planner,
+            "image_generator": ForbiddenImageGenerator(),
+        }
     )
-    with production_db() as session, pytest.raises(ValueError, match="scene_limit"):
+    with production_db() as session, pytest.raises(
+        ValueError, match=r"scene count \d+ exceeds configured scene_limit 1"
+    ):
         run_production_pipeline(
             ["https://example.com/feed.xml"],
             "AI industry",
@@ -162,3 +179,4 @@ def test_scene_limit_rejects_before_image_provider_call(
             image_size="160x90",
             feed_parser=lambda _url: feed(),
         )
+    assert visual_planner.received_limit == 1

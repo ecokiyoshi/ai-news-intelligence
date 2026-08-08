@@ -16,6 +16,7 @@ from app.youtube_visuals import (
     LocalYouTubeVisualPlanner,
     YouTubeVisualPlanner,
     build_youtube_visual_source,
+    generate_youtube_visual_plan,
 )
 
 
@@ -37,7 +38,9 @@ def source():
 
 
 def valid_response() -> OpenAIYouTubeVisualPlanResponse:
-    plan = LocalYouTubeVisualPlanner().plan(source(), channel_focus="AI news")
+    plan = LocalYouTubeVisualPlanner().plan(
+        source(), channel_focus="AI news", scene_limit=10
+    )
     return OpenAIYouTubeVisualPlanResponse(scenes=[
         OpenAIYouTubeVisualScene(
             scene_index=scene.scene_index,
@@ -75,7 +78,7 @@ def test_openai_planner_uses_typed_responses_and_complete_dialogue_context() -> 
         YouTubeVisualPlanner,
         OpenAIYouTubeVisualPlanner(client=client, model="visual-model"),
     )
-    plan = planner.plan(source(), channel_focus="AI news")
+    plan = planner.plan(source(), channel_focus="AI news", scene_limit=4)
     assert plan.title == "AI Release Explained"
     call = client.responses.calls[0]
     assert call["model"] == "visual-model"
@@ -85,6 +88,7 @@ def test_openai_planner_uses_typed_responses_and_complete_dialogue_context() -> 
         '"seo_keywords"', '"opening"', "What changed?", "ハル", "さび助",
         '"chapter_index":0', "Background", "Question about Background",
         "Explanation of Technical details", '"closing"', "Final takeaway", '"16:9"',
+        '"maximum_scene_count":4',
     ):
         assert expected in call["input"]
 
@@ -97,6 +101,7 @@ def test_openai_instructions_require_16_by_9_overlay_and_no_one_line_segmentatio
     assert "planning and prompt generation only" in lowered
     assert "scene_index" in lowered and "starting at zero" in lowered
     assert "increasing consecutively" in lowered
+    assert "maximum_scene_count" in lowered
 
 
 def test_openai_reference_schema_rejects_unsupported_section() -> None:
@@ -120,7 +125,7 @@ def test_openai_planner_normalizes_provider_scene_indexes(kind: str) -> None:
             scene.scene_index = 3
 
     plan = OpenAIYouTubeVisualPlanner(client=FakeClient(parsed)).plan(
-        source(), channel_focus="AI news"
+        source(), channel_focus="AI news", scene_limit=10
     )
 
     assert [scene.scene_index for scene in plan.scenes] == list(range(len(plan.scenes)))
@@ -132,7 +137,7 @@ def test_openai_planner_still_rejects_provider_scene_order_reversal() -> None:
 
     with pytest.raises(ValueError, match="chronology"):
         OpenAIYouTubeVisualPlanner(client=FakeClient(parsed)).plan(
-            source(), channel_focus="AI news"
+            source(), channel_focus="AI news", scene_limit=10
         )
 
 
@@ -155,14 +160,40 @@ def test_openai_planner_rejects_malformed_output(kind: str) -> None:
         parsed.scenes[0].image_prompt = " "
     with pytest.raises(ValueError):
         OpenAIYouTubeVisualPlanner(client=FakeClient(parsed)).plan(
-            source(), channel_focus="AI news"
+            source(), channel_focus="AI news", scene_limit=10
         )
+
+
+def test_openai_planner_reports_actual_and_configured_scene_limit() -> None:
+    parsed = valid_response()
+    client = FakeClient(parsed)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"scene count {len(parsed.scenes)} exceeds configured scene_limit 2",
+    ):
+        generate_youtube_visual_plan(
+            YouTubeDialogueScript(
+                title="AI Release Explained",
+                thumbnail_text="WHAT CHANGED",
+                target_minutes=15,
+                opening_lines=source().opening_lines,
+                chapters=source().chapters,
+                closing_lines=source().closing_lines,
+                seo_keywords=source().seo_keywords,
+            ),
+            OpenAIYouTubeVisualPlanner(client=client),
+            channel_focus="AI news",
+            scene_limit=2,
+        )
+
+    assert '"maximum_scene_count":2' in client.responses.calls[0]["input"]
 
 
 def test_openai_planner_rejects_missing_parsed_output() -> None:
     with pytest.raises(ValueError, match="parsed visual plan"):
         OpenAIYouTubeVisualPlanner(client=FakeClient()).plan(
-            source(), channel_focus="AI"
+            source(), channel_focus="AI", scene_limit=10
         )
 
 
@@ -170,4 +201,4 @@ def test_openai_planner_propagates_provider_exception_without_network_or_key() -
     with pytest.raises(RuntimeError, match="API unavailable"):
         OpenAIYouTubeVisualPlanner(
             client=FakeClient(error=RuntimeError("API unavailable"))
-        ).plan(source(), channel_focus="AI")
+        ).plan(source(), channel_focus="AI", scene_limit=10)

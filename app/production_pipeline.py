@@ -247,10 +247,11 @@ def run_production_pipeline(
         script, providers.dialogue_converter, channel_focus=channel_focus
     )
     visual_plan = generate_youtube_visual_plan(
-        dialogue, providers.visual_planner, channel_focus=channel_focus
+        dialogue,
+        providers.visual_planner,
+        channel_focus=channel_focus,
+        scene_limit=scene_limit,
     )
-    if len(visual_plan.scenes) > scene_limit:
-        raise ValueError("visual plan scene count exceeds scene_limit")
 
     created_at = datetime.now(timezone.utc)
     output_root.mkdir(parents=True, exist_ok=True)
