@@ -617,6 +617,61 @@ This issue produces generic narration only. It does not add さび助×ハル ch
 image prompts or generation, TTS, subtitles, Premiere integration, script persistence, database
 schema changes, YouTube descriptions, or upload/publishing.
 
+## さび助×ハル dialogue conversion
+
+Dialogue conversion is a transformation layer after the completed long-form script:
+
+```text
+15-minute narration → dialogue conversion → さび助×ハル chapter dialogue
+```
+
+By default, さび助 is the calm primary explainer who carries most factual and technical context.
+ハル is the audience proxy and learner who asks short useful questions, requests clarification,
+and occasionally summarizes understanding. Conversation should sound natural rather than alternate
+mechanically after every sentence, and repetitive filler reactions should be avoided.
+
+`YouTubeDialogueSource` copies the validated `YouTubeScript` metadata, chapters, narration,
+closing, and SEO keywords. Each `DialogueLine` has a sequential line index, configured speaker, and
+text. Every `DialogueChapter` preserves the corresponding source chapter index and title exactly,
+and `YouTubeDialogueScript` combines opening lines, all chapter conversations, and closing lines.
+Only the two configured characters may speak, and both must appear.
+
+```python
+from app.youtube_dialogue import (
+    LocalYouTubeDialogueConverter,
+    convert_youtube_script_to_dialogue,
+)
+
+dialogue = convert_youtube_script_to_dialogue(
+    completed_script,
+    LocalYouTubeDialogueConverter(),
+    channel_focus="AI industry news",
+)
+```
+
+The local converter is deterministic, offline, and preserves each source narration as the
+explainer's factual exposition. Runtime remains approximate, not guaranteed. The complete spoken
+text is evaluated with the existing Japanese-character/English-word estimator and a default ±25%
+tolerance around the source target.
+
+For OpenAI-backed conversion, inject the typed Responses API provider:
+
+```python
+from openai import OpenAI
+
+from app.openai_youtube_dialogue import OpenAIYouTubeDialogueConverter
+
+converter = OpenAIYouTubeDialogueConverter(client=OpenAI(), model="gpt-5.5")
+```
+
+The model can also be selected with `OPENAI_MODEL`. Real OpenAI calls may incur charges; never
+commit `OPENAI_API_KEY` or a populated `.env`. Conversion uses only the supplied script: it is not
+research, performs no web lookup, and must not invent facts, quotes, statistics, sources, laws,
+dates, or outcomes or strengthen uncertainty into certainty.
+
+This feature adds no image prompts or generation, TTS, subtitles/SRT, Premiere integration,
+dialogue persistence or database changes, YouTube descriptions, upload, or publishing.
+
 ## Run tests
 
 ```bash

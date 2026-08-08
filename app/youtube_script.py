@@ -293,11 +293,17 @@ def validate_outline(
 _JAPANESE_PATTERN = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
 
 
+def uses_japanese_duration_heuristic(text: str) -> bool:
+    """Return whether runtime estimation will use Japanese character counting."""
+
+    return bool(_JAPANESE_PATTERN.search(_required_text("text", text)))
+
+
 def estimate_script_minutes(text: str) -> float:
     """Estimate runtime using 280 Japanese non-space chars/min or 150 English words/min."""
 
     text = _required_text("text", text)
-    if _JAPANESE_PATTERN.search(text):
+    if uses_japanese_duration_heuristic(text):
         units = len(re.sub(r"\s+", "", text))
         return units / JAPANESE_CHARACTERS_PER_MINUTE
     return len(text.split()) / ENGLISH_WORDS_PER_MINUTE
