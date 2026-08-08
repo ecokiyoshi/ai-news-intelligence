@@ -56,6 +56,29 @@ python -c "from app.database import init_db; init_db()"
 Tests create isolated SQLite databases in pytest-managed temporary directories and do not modify
 the local development database.
 
+## RSS collector
+
+The RSS collector accepts one or more RSS or Atom feed URLs, normalizes valid entries, and stores
+new articles in the configured database. Initialize the database first, then call the collector:
+
+```bash
+python - <<'PY'
+from app.database import init_db
+from app.rss import collect_feeds
+
+init_db()
+result = collect_feeds([
+    "https://example.com/feed.xml",
+    "https://example.org/atom.xml",
+])
+print(result)
+PY
+```
+
+Entries without a title, URL, or usable source are skipped. The entry's source title is used when
+available; otherwise the feed title is used. Duplicate URLs and unavailable or malformed feeds do
+not stop the remaining entries and feeds from being processed.
+
 ## Run tests
 
 ```bash
