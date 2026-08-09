@@ -166,6 +166,29 @@ The health endpoint is available at <http://127.0.0.1:8000/health> and returns:
 {"status": "ok"}
 ```
 
+## Web dashboard
+
+The read-only dashboard displays completed YouTube production runs without changing or regenerating
+their artifacts. Docker Compose starts it alongside the scheduler and mounts generated outputs
+read-only:
+
+```bash
+docker compose up -d --build
+```
+
+Open <http://localhost:8000/dashboard>. The read-only JSON endpoints are
+`GET /api/runs` for newest-first run summaries and `GET /api/runs/{run_id}` for complete run
+metadata.
+
+For local development, select any output directory and start the existing FastAPI application:
+
+```bash
+OUTPUT_DIR=./outputs uvicorn app.main:app --reload
+```
+
+Missing, empty, incomplete, and malformed run directories are handled safely. The dashboard never
+requires an OpenAI API key or makes provider calls.
+
 ## Database
 
 Local development uses SQLite through SQLAlchemy 2.x. By default, the application connects to

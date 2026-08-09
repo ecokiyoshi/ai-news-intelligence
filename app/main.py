@@ -2,7 +2,10 @@
 
 from fastapi import FastAPI
 
+from app.dashboard import router as dashboard_router
+
 app = FastAPI(title="AI News Intelligence")
+app.include_router(dashboard_router)
 
 
 @app.get("/health")
