@@ -88,7 +88,9 @@ jobs:
             "${target}:${DEPLOY_DIR}/compose.production.yaml"
           scp "${scp_options[@]}" deploy/Caddyfile \
             "${target}:${DEPLOY_DIR}/deploy/Caddyfile"
-          scp "${scp_options[@]}" scripts/deploy.sh scripts/rollback.sh \
+          scp "${scp_options[@]}" \
+            scripts/backup.sh scripts/deploy.sh scripts/healthcheck.sh \
+            scripts/operations-common.sh scripts/restore.sh scripts/rollback.sh scripts/status.sh \
             "${target}:${DEPLOY_DIR}/scripts/"
 
       - name: Deploy and verify production
@@ -104,7 +106,7 @@ jobs:
           )
           target="${VPS_USER}@${VPS_HOST}"
           ssh "${ssh_options[@]}" "${target}" \
-            "chmod 0750 '${DEPLOY_DIR}/scripts/deploy.sh' '${DEPLOY_DIR}/scripts/rollback.sh' && cd '${DEPLOY_DIR}' && ./scripts/deploy.sh '${APP_IMAGE}'"
+            "chmod 0750 '${DEPLOY_DIR}'/scripts/*.sh && cd '${DEPLOY_DIR}' && ./scripts/deploy.sh '${APP_IMAGE}'"
 
       - name: Remove SSH private key
         if: always()

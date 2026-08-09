@@ -1,8 +1,7 @@
 # Production deployment
 
-This document covers the production runtime and automated deployment to a single Amazon Lightsail
-Ubuntu 24.04 VPS. Backup, restore, monitoring, and log-rotation automation are handled by a later
-phase.
+This document covers the production runtime, automated deployment, backup/restore, lightweight
+monitoring, and operational hardening for a single Amazon Lightsail Ubuntu 24.04 VPS.
 
 ## Architecture
 
@@ -64,6 +63,10 @@ The example defaults production to `SCHEDULER_PROVIDER=openai` and `PIPELINE_MOD
 `YOUTUBE_SCENE_LIMIT=50` is a hard pre-request cost guard; lower it before the first production run
 if desired. `OPENAI_MODEL`, `OPENAI_IMAGE_MODEL`, item counts, interval, image size, and `TZ` can be
 changed in `.env`. Never commit `.env` or paste it into logs.
+
+`DOCKER_LOG_MAX_SIZE` and `DOCKER_LOG_MAX_FILES` control the `json-file` rotation applied to every
+production service. The defaults retain five 10 MB files per container. Application, scheduler,
+dashboard, and Caddy process output remains on stdout/stderr and is collected by Docker.
 
 For a deterministic no-cost validation environment, override `SCHEDULER_PROVIDER=local`. Health
 checks themselves never call providers or download feeds.
@@ -330,6 +333,176 @@ Rollback uses the same pull, start, and health verification path as deployment. 
 application image selection and containers; persistent state, generated outputs, and Caddy data are
 retained. A moving `latest` tag is deliberately rejected. Rollback does not reverse database or
 output schema changes, so check release notes before crossing a migration boundary.
+
+## Operational status and health
+
+Run the status command from the deployment directory:
+
+```bash
+cd /opt/ai-news-intelligence
+./scripts/status.sh
+```
+
+It reports Compose status, health, recent scheduler/dashboard logs, host filesystem usage, named
+volume usage, and Docker disk usage. It reads no environment values except the non-secret public
+domain and never prints `.env`, container environments, tokens, or credentials. Set
+`STATUS_LOG_LINES` for a different log tail length.
+
+The lightweight health command is suitable for cron, a systemd timer, or an external monitor:
+
+```bash
+./scripts/healthcheck.sh
+echo "$?"  # 0 healthy; non-zero unhealthy
+```
+
+It requires exactly one healthy scheduler, dashboard, and Caddy container and a successful public
+HTTPS `/health` response. The check never starts a pipeline, downloads a feed, or contacts OpenAI.
+For a simple local alert hook, run it every five minutes and send only the exit status to the chosen
+alerting service. Use an independent uptime monitor for the public URL so a full VPS/network outage
+is still detected. Also monitor the repository's `CI`, `Publish production image`, and
+`Deploy production` GitHub Actions runs; deployment failures do not automatically roll back data.
+
+Useful failure inspection commands are:
+
+```bash
+./scripts/status.sh
+docker compose --env-file .env -f compose.production.yaml logs --since=1h scheduler
+docker compose --env-file .env -f compose.production.yaml logs --since=1h dashboard
+```
+
+## Back up persistent application data
+
+`backup.sh` archives only the `app_data` and `generated_outputs` named volumes. It never copies
+`.env`, SSH material, Docker credentials, API keys, or container environment values. The scheduler
+is stopped during the short critical section so SQLite/state and generated outputs represent one
+consistent point; dashboard and Caddy remain available. A scheduler that was already stopped is
+left stopped. A shared non-blocking lock prevents deploy, rollback, backup, and restore operations
+from modifying the stack concurrently.
+
+```bash
+cd /opt/ai-news-intelligence
+./scripts/backup.sh
+```
+
+The default destination is `/opt/ai-news-intelligence/backups`, with one UTC timestamped directory:
+
+```text
+backups/2026-08-09_120000Z/
+├── app_data.tar.gz
+├── generated_outputs.tar.gz
+├── manifest.txt
+└── SHA256SUMS
+```
+
+Use a separate mounted disk when available and pass its absolute path explicitly:
+
+```bash
+BACKUP_DIR=/mnt/ai-news-backups ./scripts/backup.sh
+```
+
+A backup stored only on the VPS does not protect against instance or disk loss. Copy completed
+timestamp directories to encrypted off-host storage with access controls and lifecycle policies.
+Do not copy `.env` or Docker/SSH credential directories with them.
+
+Optional retention deletes only direct, timestamp-named children of the resolved backup root:
+
+```bash
+BACKUP_DIR=/mnt/ai-news-backups BACKUP_RETENTION_DAYS=30 ./scripts/backup.sh
+```
+
+If `BACKUP_RETENTION_DAYS` is unset, no backup is removed. Retention never deletes generated
+project data or anything outside `BACKUP_DIR`. Monitor both the backup destination and Docker data
+filesystem so a failed or full backup disk is detected before recovery is needed.
+
+## Validate and restore a backup
+
+Before restoring, create and move a fresh backup off-host whenever the current state is still
+readable. `restore.sh` requires a direct child of `BACKUP_DIR`, validates the format, exact artifact
+set, SHA-256 checksums, archive paths, and member types before stopping services. It rejects links,
+special files, malformed directories, and non-interactive use without `--force`.
+
+Interactive restore:
+
+```bash
+cd /opt/ai-news-intelligence
+./scripts/restore.sh backups/2026-08-09_120000Z
+# Type RESTORE only after checking the warning and selected path.
+```
+
+Explicit non-interactive restore:
+
+```bash
+BACKUP_DIR=/mnt/ai-news-backups \
+  ./scripts/restore.sh --force /mnt/ai-news-backups/2026-08-09_120000Z
+```
+
+Restore safely stops scheduler and dashboard, replaces the contents of the two existing named
+volumes, restarts scheduler/dashboard/Caddy without building, and waits for container plus public
+health. It does not delete or recreate a Docker volume. A failure prints current service state and
+recent logs and attempts to restart the stack. Keep the selected backup until application behavior
+and several scheduled runs have been verified.
+
+Test the restore procedure periodically on a separate non-production Compose project or disposable
+VPS. A backup is not considered reliable until its checksums and a complete restore have succeeded.
+
+## Disk growth and manual output cleanup
+
+Generated scene images are the main unbounded project data. Measure storage before each cleanup:
+
+```bash
+./scripts/status.sh
+docker system df -v
+```
+
+There is intentionally no automatic deletion of generated projects. To remove an obsolete run,
+first create a successful backup and record the exact run ID. Stop the scheduler so it cannot write
+the selected directory while it is removed, validate the run-ID shape, then use a one-off container
+that mounts the existing output volume without starting the scheduler process:
+
+```bash
+RUN_ID=20260809T120000000000Z-0123456789abcdef
+[[ "${RUN_ID}" =~ ^[A-Za-z0-9._-]+$ ]] || exit 1
+./scripts/backup.sh
+docker compose --env-file .env -f compose.production.yaml stop --timeout 60 scheduler
+docker compose --env-file .env -f compose.production.yaml run --rm --no-deps \
+  --entrypoint sh scheduler -ceu 'rm -rf -- "/data/outputs/$1"' sh "${RUN_ID}"
+docker compose --env-file .env -f compose.production.yaml up -d --no-build scheduler
+./scripts/healthcheck.sh
+```
+
+Never delete the entire output volume, use `docker compose down -v`, or run a broad wildcard cleanup.
+Docker image/build-cache cleanup is separate from application data; inspect `docker system df -v`
+and remove only understood, unused artifacts.
+
+## Reboot resilience
+
+The bootstrap enables Docker at boot and every production service uses `restart: unless-stopped`.
+After kernel/Docker maintenance, verify the complete path rather than assuming restart succeeded:
+
+```bash
+sudo systemctl is-enabled docker
+sudo systemctl is-active docker
+cd /opt/ai-news-intelligence
+./scripts/healthcheck.sh
+./scripts/status.sh
+```
+
+A container deliberately stopped by an operator may remain stopped after reboot. Recover the
+declared stack with `docker compose --env-file .env -f compose.production.yaml up -d --no-build`,
+then rerun the health check. Test one controlled VPS reboot after the first deployment and after
+major Docker/Ubuntu upgrades.
+
+## Production security checklist
+
+- Use a dedicated restricted SSH key and non-root deployment account; disable password SSH after
+  key-based recovery access is verified.
+- Keep Ubuntu, Docker Engine, and the Compose plugin updated through a tested maintenance window.
+- Keep both Lightsail firewall and UFW enabled; expose only the configured SSH port plus 80/443.
+- Never expose the Docker daemon, dashboard port 8000, SQLite, or scheduler services publicly.
+- Keep `.env`, GHCR credentials, SSH private keys, and API tokens out of Git and backups.
+- Rotate SSH, GHCR, and provider credentials regularly and immediately after suspected exposure.
+- Retain encrypted off-host backups, monitor disk capacity, and test restoration regularly.
+- Preserve exactly one scheduler instance to prevent duplicate paid pipeline execution.
 
 ## Validate and operate
 

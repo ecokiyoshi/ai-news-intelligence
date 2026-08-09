@@ -6,6 +6,7 @@ readonly DEPLOY_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly ENV_FILE="${DEPLOY_DIR}/.env"
 readonly COMPOSE_FILE="${DEPLOY_DIR}/compose.production.yaml"
 readonly CADDY_FILE="${DEPLOY_DIR}/deploy/Caddyfile"
+readonly OPERATIONS_LOCK_FILE="${DEPLOY_DIR}/.operations.lock"
 readonly EXPECTED_IMAGE_PREFIX="ghcr.io/ecokiyoshi/ai-news-intelligence:sha-"
 readonly HEALTH_TIMEOUT_SECONDS="${DEPLOY_HEALTH_TIMEOUT_SECONDS:-180}"
 
@@ -149,6 +150,7 @@ main() {
   require_command awk
   require_command curl
   require_command docker
+  require_command flock
   require_command mktemp
 
   [[ -f "${ENV_FILE}" ]] || fail "missing runtime configuration: ${ENV_FILE}"
@@ -160,6 +162,8 @@ main() {
     fail "APP_DOMAIN must be a DNS name without a scheme, port, path, or quotes"
 
   cd -- "${DEPLOY_DIR}"
+  exec 9>"${OPERATIONS_LOCK_FILE}"
+  flock --nonblock 9 || fail "another deploy, backup, or restore operation is already running"
   write_image_to_env "${image}"
   "${COMPOSE[@]}" config --quiet
   trap diagnostics ERR

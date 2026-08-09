@@ -77,6 +77,9 @@ elif "ps" in arguments and "-q" in arguments:
     fake_curl = fake_bin / "curl"
     fake_curl.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     fake_curl.chmod(0o755)
+    fake_flock = fake_bin / "flock"
+    fake_flock.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_flock.chmod(0o755)
 
     environment = os.environ.copy()
     environment.update(

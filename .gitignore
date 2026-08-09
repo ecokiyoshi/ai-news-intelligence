@@ -163,6 +163,8 @@ venv.bak/
 *.sqlite3
 runtime-data/
 generated-outputs/
+backups/
+.operations.lock
 
 # Spyder project settings
 .spyderproject
