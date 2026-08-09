@@ -32,6 +32,7 @@ jobs:
       VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
       VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
       DEPLOY_DIR: /opt/ai-news-intelligence
+      RELEASE_ID: ${{ github.event.workflow_run.head_sha }}
       APP_IMAGE: ghcr.io/${{ github.repository }}:sha-${{ github.event.workflow_run.head_sha }}
 
     steps:
@@ -56,6 +57,7 @@ jobs:
           [[ "${VPS_USER}" != "root" ]]
           [[ "${VPS_PORT}" =~ ^[0-9]{1,5}$ ]]
           ((10#${VPS_PORT} >= 1 && 10#${VPS_PORT} <= 65535))
+          [[ "${RELEASE_ID}" =~ ^[0-9a-f]{40}$ ]]
 
           umask 077
           install -d "${HOME}/.ssh"
@@ -81,15 +83,18 @@ jobs:
             -o StrictHostKeyChecking=yes
           )
           target="${VPS_USER}@${VPS_HOST}"
+          incoming="${DEPLOY_DIR}/.incoming-${RELEASE_ID}"
 
           ssh "${ssh_options[@]}" "${target}" \
-            "install -d -m 0750 '${DEPLOY_DIR}' '${DEPLOY_DIR}/deploy' '${DEPLOY_DIR}/scripts'"
+            "rm -rf -- '${incoming}' && install -d -m 0750 '${incoming}' '${incoming}/deploy' '${incoming}/scripts'"
           scp "${scp_options[@]}" compose.production.yaml \
-            "${target}:${DEPLOY_DIR}/compose.production.yaml"
+            "${target}:${incoming}/compose.production.yaml"
           scp "${scp_options[@]}" deploy/Caddyfile \
-            "${target}:${DEPLOY_DIR}/deploy/Caddyfile"
-          scp "${scp_options[@]}" scripts/deploy.sh scripts/rollback.sh \
-            "${target}:${DEPLOY_DIR}/scripts/"
+            "${target}:${incoming}/deploy/Caddyfile"
+          scp "${scp_options[@]}" \
+            scripts/backup.sh scripts/deploy.sh scripts/healthcheck.sh \
+            scripts/operations-common.sh scripts/restore.sh scripts/rollback.sh scripts/status.sh \
+            "${target}:${incoming}/scripts/"
 
       - name: Deploy and verify production
         shell: bash
@@ -104,7 +109,7 @@ jobs:
           )
           target="${VPS_USER}@${VPS_HOST}"
           ssh "${ssh_options[@]}" "${target}" \
-            "chmod 0750 '${DEPLOY_DIR}/scripts/deploy.sh' '${DEPLOY_DIR}/scripts/rollback.sh' && cd '${DEPLOY_DIR}' && ./scripts/deploy.sh '${APP_IMAGE}'"
+            "set -Eeuo pipefail; exec 9>'${DEPLOY_DIR}/.operations.lock'; flock --nonblock 9 || { echo 'Another deploy, backup, or restore operation is already running.' >&2; exit 1; }; install -d -m 0750 '${DEPLOY_DIR}/deploy' '${DEPLOY_DIR}/scripts'; install -m 0644 '${DEPLOY_DIR}/.incoming-${RELEASE_ID}/compose.production.yaml' '${DEPLOY_DIR}/compose.production.yaml'; install -m 0644 '${DEPLOY_DIR}/.incoming-${RELEASE_ID}/deploy/Caddyfile' '${DEPLOY_DIR}/deploy/Caddyfile'; install -m 0750 '${DEPLOY_DIR}/.incoming-${RELEASE_ID}'/scripts/*.sh '${DEPLOY_DIR}/scripts/'; rm -rf -- '${DEPLOY_DIR}/.incoming-${RELEASE_ID}'; cd '${DEPLOY_DIR}'; OPERATIONS_LOCK_FD=9 ./scripts/deploy.sh '${APP_IMAGE}'"
 
       - name: Remove SSH private key
         if: always()
