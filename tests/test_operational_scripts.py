@@ -287,3 +287,5 @@ def test_deploy_workflow_uploads_all_operational_scripts() -> None:
         "status.sh",
     ):
         assert f"scripts/{script_name}" in workflow
+    assert ".incoming-${RELEASE_ID}" in workflow
+    assert "OPERATIONS_LOCK_FD=9" in workflow

@@ -298,7 +298,9 @@ CI succeeds on main
 
 Only a successful push-driven publication can deploy. Production concurrency is one and queued
 deployments are not cancelled mid-flight. The workflow uploads only the Compose file, Caddyfile,
-and deployment scripts over strictly verified SSH. It does not build on the VPS or transfer `.env`.
+and deployment scripts over strictly verified SSH. Files are staged under a commit-specific
+incoming directory and promoted only while holding the same exclusive lock used by backup and
+restore. It does not build on the VPS or transfer `.env`.
 
 For the first deployment, complete all VPS, DNS, `.env`, GHCR login, SSH, and GitHub secret setup,
 then merge a validated change to `main` or rerun the successful `Publish production image` workflow.

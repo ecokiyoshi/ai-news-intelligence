@@ -32,6 +32,20 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
 
+acquire_operations_lock() {
+  local inherited_fd=${OPERATIONS_LOCK_FD:-}
+
+  if [[ -n "${inherited_fd}" ]]; then
+    [[ "${inherited_fd}" =~ ^[0-9]+$ ]] || fail "OPERATIONS_LOCK_FD must be numeric"
+    flock --nonblock "${inherited_fd}" ||
+      fail "inherited operations lock is unavailable"
+    return 0
+  fi
+
+  exec 9>"${OPERATIONS_LOCK_FILE}"
+  flock --nonblock 9 || fail "another deploy, backup, or restore operation is already running"
+}
+
 write_image_to_env() {
   local image=$1
   local temporary_file
@@ -162,8 +176,7 @@ main() {
     fail "APP_DOMAIN must be a DNS name without a scheme, port, path, or quotes"
 
   cd -- "${DEPLOY_DIR}"
-  exec 9>"${OPERATIONS_LOCK_FILE}"
-  flock --nonblock 9 || fail "another deploy, backup, or restore operation is already running"
+  acquire_operations_lock
   write_image_to_env "${image}"
   "${COMPOSE[@]}" config --quiet
   trap diagnostics ERR
