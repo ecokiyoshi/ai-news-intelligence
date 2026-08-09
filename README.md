@@ -6,8 +6,9 @@ Backend foundation for AI News Intelligence, built with Python and FastAPI.
 
 The production runtime uses a separate Compose file with one scheduler, the internal-only
 dashboard, and Caddy automatic HTTPS. See [Production deployment](docs/production-deployment.md)
-for architecture, required environment values, validation, lifecycle commands, logs, and health
-checks. The existing `compose.yaml` remains the local development configuration.
+for Amazon Lightsail provisioning, secure GitHub Actions deployment, runtime configuration,
+immutable image rollback, lifecycle commands, logs, and health checks. The existing `compose.yaml`
+remains the local development configuration.
 
 ## Requirements
 

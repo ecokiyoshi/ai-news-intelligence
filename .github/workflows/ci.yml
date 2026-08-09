@@ -42,6 +42,18 @@ jobs:
       - name: Run tests
         run: python -m pytest
 
+      - name: Validate deployment scripts
+        run: |
+          bash -n deploy/lightsail-bootstrap.sh scripts/deploy.sh scripts/rollback.sh
+          if scripts/deploy.sh latest; then
+            echo "deploy.sh unexpectedly accepted a mutable tag" >&2
+            exit 1
+          fi
+          if scripts/rollback.sh latest; then
+            echo "rollback.sh unexpectedly accepted a mutable tag" >&2
+            exit 1
+          fi
+
       - name: Build application image
         run: docker build --tag ai-news-intelligence:ci .
 

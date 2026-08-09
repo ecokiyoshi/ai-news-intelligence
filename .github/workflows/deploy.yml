@@ -1,0 +1,112 @@
+name: Deploy production
+
+on:
+  workflow_run:
+    workflows:
+      - Publish production image
+    branches:
+      - main
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy immutable image to VPS
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'workflow_run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_PORT: ${{ secrets.VPS_PORT }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+      DEPLOY_DIR: /opt/ai-news-intelligence
+      APP_IMAGE: ghcr.io/${{ github.repository }}:sha-${{ github.event.workflow_run.head_sha }}
+
+    steps:
+      - name: Check out published commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Configure verified SSH connection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          required=(VPS_HOST VPS_USER VPS_PORT VPS_SSH_KEY VPS_KNOWN_HOSTS)
+          for variable in "${required[@]}"; do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "::error::Required production secret is missing: ${variable}"
+              exit 1
+            fi
+          done
+          [[ "${VPS_HOST}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$ ]]
+          [[ "${VPS_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "${VPS_USER}" != "root" ]]
+          [[ "${VPS_PORT}" =~ ^[0-9]{1,5}$ ]]
+          ((10#${VPS_PORT} >= 1 && 10#${VPS_PORT} <= 65535))
+
+          umask 077
+          install -d "${HOME}/.ssh"
+          printf '%s\n' "${VPS_SSH_KEY}" >"${HOME}/.ssh/deploy_key"
+          printf '%s\n' "${VPS_KNOWN_HOSTS}" >"${HOME}/.ssh/known_hosts"
+
+      - name: Upload deployment files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh_options=(
+            -i "${HOME}/.ssh/deploy_key"
+            -p "${VPS_PORT}"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+          )
+          scp_options=(
+            -i "${HOME}/.ssh/deploy_key"
+            -P "${VPS_PORT}"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+          )
+          target="${VPS_USER}@${VPS_HOST}"
+
+          ssh "${ssh_options[@]}" "${target}" \
+            "install -d -m 0750 '${DEPLOY_DIR}' '${DEPLOY_DIR}/deploy' '${DEPLOY_DIR}/scripts'"
+          scp "${scp_options[@]}" compose.production.yaml \
+            "${target}:${DEPLOY_DIR}/compose.production.yaml"
+          scp "${scp_options[@]}" deploy/Caddyfile \
+            "${target}:${DEPLOY_DIR}/deploy/Caddyfile"
+          scp "${scp_options[@]}" scripts/deploy.sh scripts/rollback.sh \
+            "${target}:${DEPLOY_DIR}/scripts/"
+
+      - name: Deploy and verify production
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh_options=(
+            -i "${HOME}/.ssh/deploy_key"
+            -p "${VPS_PORT}"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+          )
+          target="${VPS_USER}@${VPS_HOST}"
+          ssh "${ssh_options[@]}" "${target}" \
+            "chmod 0750 '${DEPLOY_DIR}/scripts/deploy.sh' '${DEPLOY_DIR}/scripts/rollback.sh' && cd '${DEPLOY_DIR}' && ./scripts/deploy.sh '${APP_IMAGE}'"
+
+      - name: Remove SSH private key
+        if: always()
+        shell: bash
+        run: rm -f -- "${HOME}/.ssh/deploy_key"
