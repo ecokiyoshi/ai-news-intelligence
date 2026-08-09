@@ -54,7 +54,8 @@ jobs:
           [[ "${VPS_HOST}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$ ]]
           [[ "${VPS_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
           [[ "${VPS_USER}" != "root" ]]
-          [[ "${VPS_PORT}" =~ ^[0-9]{1,5}$ ]] && ((VPS_PORT >= 1 && VPS_PORT <= 65535))
+          [[ "${VPS_PORT}" =~ ^[0-9]{1,5}$ ]]
+          ((10#${VPS_PORT} >= 1 && 10#${VPS_PORT} <= 65535))
 
           umask 077
           install -d "${HOME}/.ssh"

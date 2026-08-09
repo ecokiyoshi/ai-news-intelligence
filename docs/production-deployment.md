@@ -101,7 +101,6 @@ deployment user and the fixed application directory:
 
 ```bash
 sudo adduser --disabled-password --gecos "" deploy
-sudo usermod -aG docker deploy
 sudo install -d -o deploy -g deploy -m 0750 /opt/ai-news-intelligence
 sudo install -d -o deploy -g deploy -m 0750 /opt/ai-news-intelligence/deploy
 sudo install -d -o deploy -g deploy -m 0750 /opt/ai-news-intelligence/scripts
@@ -130,6 +129,7 @@ EOF
 sudo apt update
 sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 sudo systemctl enable --now docker
+sudo usermod -aG docker deploy
 docker version
 docker compose version
 ```
@@ -162,9 +162,17 @@ obtain a certificate.
 
 ## Configure production state and registry access
 
-On the VPS, create `/opt/ai-news-intelligence/.env` from `.env.example`, populate the required
-runtime values described above, and run `chmod 600 .env`. The automation updates only the
-`APP_IMAGE` line. It never uploads, replaces, displays, or checks in the remaining runtime secrets.
+From a trusted checkout, copy only the unpopulated template to the VPS before the first automated
+deployment:
+
+```bash
+scp -P <port> .env.example deploy@<host>:/opt/ai-news-intelligence/.env
+ssh -p <port> deploy@<host> 'chmod 600 /opt/ai-news-intelligence/.env'
+```
+
+On the VPS, populate the required runtime values described above. Do not enter secret values on the
+local machine or pass them through `scp`. The automation updates only the `APP_IMAGE` line. It never
+uploads, replaces, displays, or checks in the remaining runtime secrets.
 
 If the GHCR package is private, authenticate once as `deploy` with a token that has only the
 package read permission:
