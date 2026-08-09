@@ -1,0 +1,95 @@
+services:
+  scheduler:
+    build:
+      context: .
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      APP_DATA_DIR: /data/state
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/state/ai_news.db}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_IMAGE_MODEL: ${OPENAI_IMAGE_MODEL:-gpt-image-2}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.5}
+      OUTPUT_DIR: /data/outputs
+      PIPELINE_MODE: ${PIPELINE_MODE:-end_to_end}
+      PIPELINE_NEWS_LIMIT: ${PIPELINE_NEWS_LIMIT:-10}
+      SCHEDULER_FEED_URLS: ${SCHEDULER_FEED_URLS:-}
+      SCHEDULER_INTERVAL_SECONDS: ${SCHEDULER_INTERVAL_SECONDS:-3600}
+      SCHEDULER_PROVIDER: ${SCHEDULER_PROVIDER:-openai}
+      SCHEDULER_RELEVANCE_TARGET: ${SCHEDULER_RELEVANCE_TARGET:-}
+      TZ: ${TZ:-Asia/Tokyo}
+      YOUTUBE_CHANNEL_FOCUS: ${YOUTUBE_CHANNEL_FOCUS:-}
+      YOUTUBE_IDEA_COUNT: ${YOUTUBE_IDEA_COUNT:-3}
+      YOUTUBE_IMAGE_SIZE: ${YOUTUBE_IMAGE_SIZE:-1792x1024}
+      YOUTUBE_PACKAGING_COUNT: ${YOUTUBE_PACKAGING_COUNT:-5}
+      YOUTUBE_SCENE_LIMIT: ${YOUTUBE_SCENE_LIMIT:-50}
+      YOUTUBE_TARGET_MINUTES: ${YOUTUBE_TARGET_MINUTES:-15}
+    volumes:
+      - app_data:/data/state
+      - generated_outputs:/data/outputs
+    networks:
+      - scheduler_egress
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.runtime", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  dashboard:
+    build:
+      context: .
+    init: true
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: unless-stopped
+    environment:
+      OUTPUT_DIR: /data/outputs
+    volumes:
+      - generated_outputs:/data/outputs:ro
+    networks:
+      - app_internal
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - app_internal
+      - caddy_edge
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  app_internal:
+    internal: true
+  scheduler_egress:
+  caddy_edge:
+
+volumes:
+  app_data:
+  generated_outputs:
+  caddy_data:
+  caddy_config:

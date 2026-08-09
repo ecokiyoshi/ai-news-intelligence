@@ -2,6 +2,13 @@
 
 Backend foundation for AI News Intelligence, built with Python and FastAPI.
 
+## Production deployment
+
+The production runtime uses a separate Compose file with one scheduler, the internal-only
+dashboard, and Caddy automatic HTTPS. See [Production deployment](docs/production-deployment.md)
+for architecture, required environment values, validation, lifecycle commands, logs, and health
+checks. The existing `compose.yaml` remains the local development configuration.
+
 ## Requirements
 
 - Python 3.12 or newer
