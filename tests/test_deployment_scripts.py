@@ -10,6 +10,21 @@ IMAGE_SHA = "0123456789abcdef0123456789abcdef01234567"
 IMAGE = f"ghcr.io/ecokiyoshi/ai-news-intelligence:sha-{IMAGE_SHA}"
 
 
+def test_lightsail_bootstrap_has_valid_bash_syntax() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    script = repository / "deploy/lightsail-bootstrap.sh"
+
+    result = subprocess.run(
+        ["bash", "-n", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert os.access(script, os.X_OK)
+
+
 def _deployment_fixture(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
     repository = Path(__file__).resolve().parents[1]
     deployment = tmp_path / "deployment"

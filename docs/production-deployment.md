@@ -1,7 +1,8 @@
 # Production deployment
 
-This document covers the production runtime and automated deployment to a single Ubuntu 24.04
-VPS. Backup, restore, monitoring, and log-rotation automation are handled by a later phase.
+This document covers the production runtime and automated deployment to a single Amazon Lightsail
+Ubuntu 24.04 VPS. Backup, restore, monitoring, and log-rotation automation are handled by a later
+phase.
 
 ## Architecture
 
@@ -94,7 +95,83 @@ APP_IMAGE=ghcr.io/ecokiyoshi/ai-news-intelligence:sha-0123456789abcdef0123456789
 immutable SHA tag makes the deployed application version auditable and allows rollback to a
 previously published SHA tag.
 
-## Provision the Ubuntu VPS
+## Create the Amazon Lightsail instance
+
+In the AWS console, create a Lightsail Linux/Unix instance with the **OS only / Ubuntu 24.04 LTS**
+blueprint. Use the AWS Region closest to the intended audience (normally Tokyo for this project)
+and select a bundle with at least 2 vCPU, 4 GB RAM, and 40 GB persistent disk. Keep only one
+production instance running the scheduler.
+
+After the instance becomes ready:
+
+1. Allocate a Lightsail static IPv4 address in the same Region and attach it to the instance. The
+   instance's original dynamic public IP can change after a stop/start, so do not use it for DNS or
+   GitHub Actions secrets.
+2. In the instance's **Networking** tab, configure the Lightsail IPv4 firewall with TCP 22, TCP 80,
+   TCP 443, and UDP 443. Restrict TCP 22 to trusted administrator addresses while bootstrapping.
+   GitHub-hosted runners use changing egress addresses; before enabling automated deployment,
+   choose the SSH access model described under **Configure GitHub Actions secrets**.
+3. Do not enable public port 8000. The Compose stack exposes only Caddy on 80/443.
+4. Create an `A` record for `APP_DOMAIN` pointing to the attached static IPv4 address. Add `AAAA`
+   only if Lightsail IPv6 is deliberately enabled and protected by equivalent firewall rules.
+
+Lightsail's browser SSH session and downloaded default key initially connect to an Ubuntu instance
+as `ubuntu`. Use that administrative account only for bootstrapping; automated deployments use the
+dedicated, non-root `deploy` account created below.
+
+## Bootstrap Ubuntu
+
+Copy the tracked bootstrap script to the new instance using the static IP, then execute it from the
+browser SSH session or a trusted administrator terminal:
+
+```bash
+scp -i <lightsail-key.pem> deploy/lightsail-bootstrap.sh ubuntu@<static-ip>:/tmp/
+ssh -i <lightsail-key.pem> ubuntu@<static-ip>
+sudo bash /tmp/lightsail-bootstrap.sh
+```
+
+The script installs Docker Engine and the Compose plugin from Docker's official Ubuntu repository,
+creates the `deploy` user and application directories, and enables UFW for SSH, HTTP, and HTTPS.
+It is safe to run again after an interrupted installation. If SSH uses a non-default port, preserve
+access by running it as `sudo SSH_PORT=<port> bash /tmp/lightsail-bootstrap.sh` and configure the
+same port in the Lightsail firewall before enabling UFW.
+
+The Lightsail firewall and UFW are independent layers; the required port must be allowed in both.
+Docker-published ports can bypass some UFW rules. This Compose file intentionally publishes only
+Caddy's 80/443 TCP and 443 UDP ports; it never publishes dashboard port 8000.
+
+## Configure the deployment account
+
+Generate a dedicated Ed25519 key on a trusted administrator machine. Use a separate key from the
+Lightsail default key, protect the private key, and never commit it:
+
+```bash
+ssh-keygen -t ed25519 -f ./lightsail-github-deploy -C github-actions-production
+```
+
+From the existing `ubuntu` session, install only the public key. Prefix it with OpenSSH `restrict`
+to disable PTY allocation and forwarding while retaining non-interactive deployment commands:
+
+```bash
+sudo sh -c 'printf "restrict %s\\n" "<contents-of-lightsail-github-deploy.pub>" >> /home/deploy/.ssh/authorized_keys'
+sudo chown deploy:deploy /home/deploy/.ssh/authorized_keys
+sudo chmod 600 /home/deploy/.ssh/authorized_keys
+```
+
+Open a second terminal and verify login and Docker access before closing the administrative session:
+
+```bash
+ssh -i ./lightsail-github-deploy deploy@<static-ip> 'docker version && docker compose version'
+```
+
+Save the private key contents for the GitHub `VPS_SSH_KEY` secret only after this succeeds. The
+downloaded Lightsail key remains an administrator recovery credential and must not be used by the
+deployment workflow.
+
+## Manual Ubuntu provisioning reference
+
+The bootstrap script above automates this section. These commands are retained as an auditable
+manual reference for rebuilding a host without the script.
 
 Use Ubuntu 24.04 with at least 2 vCPU, 4 GB RAM, and 40 GB of persistent disk. Create a non-root
 deployment user and the fixed application directory:
@@ -134,13 +211,9 @@ docker version
 docker compose version
 ```
 
-Add a dedicated public key to `/home/deploy/.ssh/authorized_keys`, owned by `deploy`, with directory
-mode `700` and file mode `600`. Prefix that key's line with OpenSSH's `restrict` option to disable
-PTY allocation and forwarding while still allowing the required non-interactive commands. Confirm
-a second key-authenticated SSH session works before disabling password authentication. Restrict the
-key at the network layer to GitHub-hosted runner egress ranges only if those changing ranges are
-maintained automatically; otherwise use a self-hosted runner or a VPN/bastion for a stable source.
-Never expose the Docker socket over TCP.
+Add the dedicated public key to `/home/deploy/.ssh/authorized_keys`, owned by `deploy`, with directory
+mode `700` and file mode `600`, as described above. Confirm a second key-authenticated SSH session
+works before changing SSH settings. Never expose the Docker socket over TCP.
 
 Allow the configured SSH port plus Caddy's HTTP/HTTPS ports, then enable the firewall. Replace
 `22` if `VPS_PORT` is different:
@@ -154,11 +227,8 @@ sudo ufw enable
 sudo ufw status verbose
 ```
 
-Docker-published ports can bypass some UFW rules. This Compose file intentionally publishes only
-Caddy's 80/443 TCP and 443 UDP ports; it never publishes dashboard port 8000. Create an `A` DNS
-record for `APP_DOMAIN` pointing at the VPS public IPv4 address. Add `AAAA` only when IPv6 is fully
-configured and firewalled. Wait for DNS propagation before the first deployment so Caddy can
-obtain a certificate.
+Wait for the `A` record created during Lightsail setup to propagate before the first deployment so
+Caddy can obtain a certificate.
 
 ## Configure production state and registry access
 
@@ -193,6 +263,14 @@ Configure these repository or `production` environment secrets:
 - `VPS_PORT`: the SSH TCP port, normally `22`.
 - `VPS_SSH_KEY`: the complete private key for the matching authorized key.
 - `VPS_KNOWN_HOSTS`: the verified OpenSSH known-hosts line for this host and port.
+
+The included workflow runs on a GitHub-hosted runner and therefore needs an inbound SSH path to the
+instance. GitHub's published runner address ranges change over time and are not recommended as a
+long-lived allowlist. Prefer a self-hosted runner behind a stable address or a VPN/bastion. If the
+standard workflow is used directly, TCP 22 must be reachable through both the Lightsail firewall
+and UFW; use key-only authentication, the dedicated restricted deployment key, verified host keys,
+and automated maintenance of any source-IP allowlist. Do not silently leave SSH open to the world
+after initial setup.
 
 Obtain the server's Ed25519 host-key fingerprint on the VPS with
 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. On a trusted administrator machine, collect the
