@@ -1,7 +1,7 @@
 # Production deployment
 
-This document covers the phase-one runtime for a single Ubuntu VPS. Automated CI, image
-publication, VPS deployment, backup, and monitoring are intentionally handled by later phases.
+This document covers the production runtime for a single Ubuntu VPS and the image published by
+GitHub Actions. Automated VPS deployment, backup, and monitoring are handled by later phases.
 
 ## Architecture
 
@@ -52,6 +52,8 @@ chmod 600 .env
 Set every empty value required by the selected pipeline, especially:
 
 - `APP_DOMAIN`: public DNS name, without `https://` or a path.
+- `APP_IMAGE`: GHCR image tag used by both application services. Use an immutable SHA tag in
+  production rather than relying only on `latest`.
 - `OPENAI_API_KEY`: required when `SCHEDULER_PROVIDER=openai`; keep it only in `.env` on the VPS.
 - `SCHEDULER_FEED_URLS`: comma-separated HTTP(S) RSS/Atom URLs.
 - `SCHEDULER_RELEVANCE_TARGET`: scoring target used by the news pipeline.
@@ -65,6 +67,34 @@ changed in `.env`. Never commit `.env` or paste it into logs.
 For a deterministic no-cost validation environment, override `SCHEDULER_PROVIDER=local`. Health
 checks themselves never call providers or download feeds.
 
+## Published images
+
+After the `CI` workflow succeeds for a push to `main`, the `Publish production image` workflow
+builds the validated commit once and publishes both of these tags:
+
+```text
+ghcr.io/ecokiyoshi/ai-news-intelligence:latest
+ghcr.io/ecokiyoshi/ai-news-intelligence:sha-<40-character-commit-sha>
+```
+
+The workflow authenticates with the repository-scoped `GITHUB_TOKEN`; no personal access token is
+required. Its permissions are limited to reading repository contents and writing packages. Pull
+request workflows never publish an image.
+
+The package may be private depending on its GHCR visibility. Authenticate Docker with a token that
+can read the package before pulling a private image. Do not store that token in this repository.
+
+Pin the VPS to the immutable tag recorded by the successful workflow:
+
+```dotenv
+APP_IMAGE=ghcr.io/ecokiyoshi/ai-news-intelligence:sha-0123456789abcdef0123456789abcdef01234567
+```
+
+`latest` is convenient for discovery but can move after every successful `main` build. An
+immutable SHA tag makes the deployed application version auditable and allows rollback by changing
+`APP_IMAGE` to a previously published SHA tag. Automated deployment and rollback commands are
+added in the next phase.
+
 ## Validate and operate
 
 Validate interpolation and the rendered Compose model before starting:
@@ -73,11 +103,18 @@ Validate interpolation and the rendered Compose model before starting:
 docker compose --env-file .env -f compose.production.yaml config --quiet
 ```
 
-Build and start all three services:
+Pull the selected image, then start all three services:
+
+```bash
+docker compose --env-file .env -f compose.production.yaml pull scheduler dashboard
+docker compose --env-file .env -f compose.production.yaml up -d
+docker compose --env-file .env -f compose.production.yaml ps
+```
+
+For local production-stack development, the retained `build` configuration still supports:
 
 ```bash
 docker compose --env-file .env -f compose.production.yaml up -d --build
-docker compose --env-file .env -f compose.production.yaml ps
 ```
 
 Stop, restart, or remove containers while retaining data:

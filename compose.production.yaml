@@ -1,5 +1,6 @@
 services:
   scheduler:
+    image: ${APP_IMAGE:-ghcr.io/ecokiyoshi/ai-news-intelligence:latest}
     build:
       context: .
     init: true
@@ -38,6 +39,7 @@ services:
       start_period: 20s
 
   dashboard:
+    image: ${APP_IMAGE:-ghcr.io/ecokiyoshi/ai-news-intelligence:latest}
     build:
       context: .
     init: true
