@@ -28,8 +28,9 @@ cp .env.example .env
 
 Set `SCHEDULER_FEED_URLS` to a comma-separated list and set
 `SCHEDULER_RELEVANCE_TARGET`. `SCHEDULER_PROVIDER=local` is deterministic and needs neither an API
-key nor OpenAI network access. Set it to `openai` only when `OPENAI_API_KEY` is configured; real API
-calls may incur charges. Never commit `.env` or an API key.
+key nor network access. Set it to `openai` only when `OPENAI_API_KEY` is configured, or to
+`anthropic` only when `ANTHROPIC_API_KEY` is configured; real API calls may incur charges. Never
+commit `.env` or an API key.
 
 Start and inspect the service:
 
@@ -68,6 +69,7 @@ The container paths and configuration precedence are:
 - `SCHEDULER_INTERVAL_SECONDS` controls the interval cadence. `TZ` defaults to `Asia/Tokyo` in the
   Compose example; interval scheduling is elapsed-time based rather than a wall-clock cron time.
 - `OPENAI_MODEL` and `OPENAI_IMAGE_MODEL` retain the existing provider model overrides.
+  `ANTHROPIC_MODEL` is the equivalent override for the Claude text provider.
 
 The deployment assumes exactly one scheduler container. **Do not scale `scheduler` above one
 replica:** there is no distributed lock, so multiple replicas may execute duplicate jobs.
@@ -110,6 +112,14 @@ the existing Images API adapter. It requires `OPENAI_API_KEY`, respects `OPENAI_
 `OPENAI_IMAGE_MODEL`, and generates production scene images. Text calls and every selected scene
 image may incur charges. `YOUTUBE_SCENE_LIMIT` is a hard pre-call cost guard; an oversized visual
 plan fails before any image request. Never commit the key or populated `.env`.
+
+`SCHEDULER_PROVIDER=anthropic` connects every text stage (summarization, scoring, YouTube ideas,
+Potential scoring, packaging, outline/script, さび助×ハル dialogue, and 16:9 visual planning) to
+Claude through the Anthropic Messages API instead. It requires `ANTHROPIC_API_KEY` and respects
+`ANTHROPIC_MODEL`. Anthropic has no Images API equivalent, so scene image generation still uses the
+deterministic local generator (valid placeholder PNGs) even in this mode; only `openai` produces
+real generated scene images today. Text calls to Claude may incur charges. Never commit the key or
+a populated `.env`.
 
 Run the configured composition once without starting the interval scheduler:
 
@@ -311,6 +321,46 @@ with Session(engine) as session:
 Only real API calls incur OpenAI API charges. Automated tests inject fake clients, require no API
 key, and make no network requests.
 
+### Claude-backed summarizer
+
+`AnthropicSummarizer` implements the same provider-independent interface using the official
+`anthropic` Python SDK and Messages API. The SDK reads `ANTHROPIC_API_KEY` from the environment.
+Select a model with `ANTHROPIC_MODEL` or the constructor's `model` argument:
+
+```bash
+export ANTHROPIC_API_KEY="<your-key>"
+export ANTHROPIC_MODEL="claude-sonnet-4-5"
+```
+
+Never commit an API key or a populated `.env` file.
+
+```python
+from anthropic import Anthropic
+from sqlalchemy.orm import Session
+
+from app.anthropic_summarizer import AnthropicSummarizer
+from app.database import engine
+from app.models import NewsArticle
+from app.summarization import summarize_article
+
+client = Anthropic(timeout=30.0)
+summarizer = AnthropicSummarizer(client=client, model="claude-sonnet-4-5")
+
+with Session(engine) as session:
+    article = session.get(NewsArticle, 1)
+    if article is not None:
+        result = summarize_article(
+            article,
+            "Explicit article text to summarize.",
+            summarizer,
+            session,
+        )
+        print(result.summary)
+```
+
+Only real API calls incur Anthropic API charges. Automated tests inject fake clients, require no
+API key, and make no network requests.
+
 ## Article scoring
 
 The provider-independent scoring service evaluates explicit article text with two 0–100 scores:
@@ -376,6 +426,40 @@ with Session(engine) as session:
 
 Real OpenAI API calls may incur charges. Never commit `OPENAI_API_KEY`, a populated `.env`, or
 other credentials. Tests use injected fake clients and never contact the OpenAI API.
+
+### Claude-backed scorer
+
+`AnthropicScorer` implements the same interface with the Anthropic Messages API, forcing a single
+structured tool call and validating its result. It uses the same `ANTHROPIC_API_KEY` and
+`ANTHROPIC_MODEL` environment variables described above, or accepts a model and client directly:
+
+```python
+from anthropic import Anthropic
+from sqlalchemy.orm import Session
+
+from app.anthropic_scorer import AnthropicScorer
+from app.database import engine
+from app.models import NewsArticle
+from app.scoring import score_article
+
+client = Anthropic(timeout=30.0)
+scorer = AnthropicScorer(client=client, model="claude-sonnet-4-5")
+
+with Session(engine) as session:
+    article = session.get(NewsArticle, 1)
+    if article is not None:
+        result = score_article(
+            article,
+            "Explicit article text to score.",
+            "cybersecurity vulnerabilities and attacks",
+            scorer,
+            session,
+        )
+        print(result)
+```
+
+Real Anthropic API calls may incur charges. Never commit `ANTHROPIC_API_KEY`, a populated `.env`,
+or other credentials. Tests use injected fake clients and never contact the Anthropic API.
 
 ## News ranking
 
@@ -554,6 +638,19 @@ The OpenAI provider uses Responses API typed structured output. Real calls may i
 never commit `OPENAI_API_KEY`. Ideas are not persisted yet. This feature does not add YouTube
 potential scoring, news clustering, script generation, image generation, or YouTube publishing.
 
+For Claude-backed generation, construct and inject `AnthropicYouTubeIdeaGenerator` the same way:
+
+```python
+from anthropic import Anthropic
+
+from app.anthropic_youtube_ideas import AnthropicYouTubeIdeaGenerator
+
+generator = AnthropicYouTubeIdeaGenerator(client=Anthropic(), model="claude-sonnet-4-5")
+```
+
+The Claude provider forces a single structured tool call on the Anthropic Messages API. Real calls
+may incur charges; never commit `ANTHROPIC_API_KEY`.
+
 ## YouTube Potential Score
 
 YouTube Potential Score evaluates whether a generated `YouTubeIdea` is promising as a video
@@ -600,6 +697,11 @@ evaluation, inject `OpenAIYouTubePotentialScorer`; it uses Responses API typed s
 for dimension scores only, while the final weighted score remains calculated in core code. Real
 OpenAI calls may incur charges, and API keys must never be committed.
 
+For Claude-backed evaluation, inject `AnthropicYouTubePotentialScorer` from
+`app.anthropic_youtube_potential`; it forces a structured tool call for dimension scores only, and
+the final weighted score is still calculated in core code. Real Anthropic calls may incur charges,
+and `ANTHROPIC_API_KEY` must never be committed.
+
 `searchability_score` is only a heuristic based on the supplied title, topic, and SEO keywords. It
 is not measured YouTube or Google search volume, Google Trends data, CTR, audience size, or a view
 prediction. Potential results are not persisted, and this feature adds no trends integration,
@@ -642,6 +744,10 @@ The default maximum input is 50 articles to guard against accidental large provi
 implementation performs no batching and does not persist clusters. It adds no embeddings, vector
 database, semantic search infrastructure, or DB schema changes. Never commit `OPENAI_API_KEY` or a
 populated environment file.
+
+`AnthropicNewsClusterer` (`app.anthropic_news_clustering`) is the equivalent Claude-backed provider;
+it forces a structured tool call on the Anthropic Messages API for the same grouping schema. Real
+calls may incur charges; never commit `ANTHROPIC_API_KEY`.
 
 ## YouTube title and thumbnail packaging
 
@@ -711,6 +817,24 @@ editorial heuristics, not measured performance predictions. This feature does no
 generate thumbnail images or scripts, upload to YouTube, fetch analytics/trends, or change the
 database schema.
 
+For Claude-backed use, inject the equivalent structured-tool-call providers:
+
+```python
+from anthropic import Anthropic
+
+from app.anthropic_youtube_packaging import (
+    AnthropicYouTubePackagingEvaluator,
+    AnthropicYouTubePackagingGenerator,
+)
+
+client = Anthropic()
+generator = AnthropicYouTubePackagingGenerator(client=client, model="claude-sonnet-4-5")
+evaluator = AnthropicYouTubePackagingEvaluator(client=client, model="claude-sonnet-4-5")
+```
+
+The model can also be selected with `ANTHROPIC_MODEL`. Real calls may incur API charges; never
+commit `ANTHROPIC_API_KEY` or a populated `.env`.
+
 ## 15-minute YouTube outline and script
 
 The script layer turns an already selected idea and packaging option into a structured generic
@@ -778,6 +902,24 @@ This issue produces generic narration only. It does not add さび助×ハル ch
 image prompts or generation, TTS, subtitles, Premiere integration, script persistence, database
 schema changes, YouTube descriptions, or upload/publishing.
 
+For Claude-backed generation, inject the equivalent providers:
+
+```python
+from anthropic import Anthropic
+
+from app.anthropic_youtube_script import (
+    AnthropicYouTubeOutlineGenerator,
+    AnthropicYouTubeScriptGenerator,
+)
+
+client = Anthropic()
+outline_generator = AnthropicYouTubeOutlineGenerator(client=client, model="claude-sonnet-4-5")
+script_generator = AnthropicYouTubeScriptGenerator(client=client, model="claude-sonnet-4-5")
+```
+
+The model can also be selected with `ANTHROPIC_MODEL`. Real calls may incur charges; never commit
+`ANTHROPIC_API_KEY` or a populated `.env`.
+
 ## さび助×ハル dialogue conversion
 
 Dialogue conversion is a transformation layer after the completed long-form script:
@@ -832,6 +974,19 @@ dates, or outcomes or strengthen uncertainty into certainty.
 
 This feature adds no image prompts or generation, TTS, subtitles/SRT, Premiere integration,
 dialogue persistence or database changes, YouTube descriptions, upload, or publishing.
+
+For Claude-backed conversion, inject the equivalent provider:
+
+```python
+from anthropic import Anthropic
+
+from app.anthropic_youtube_dialogue import AnthropicYouTubeDialogueConverter
+
+converter = AnthropicYouTubeDialogueConverter(client=Anthropic(), model="claude-sonnet-4-5")
+```
+
+The model can also be selected with `ANTHROPIC_MODEL`. Real Anthropic calls may incur charges;
+never commit `ANTHROPIC_API_KEY` or a populated `.env`.
 
 ## 16:9 visual planning and image prompts
 
@@ -890,6 +1045,19 @@ locations, statistics, dates, quotes, or outcomes.
 This feature creates text plans and prompts only. It does not call the OpenAI Images API or any
 image/video service, create or download PNG/JPG/WEBP files, store canonical character assets,
 generate TTS/subtitles, integrate with Premiere, persist plans, or upload to YouTube.
+
+For Claude-backed text planning, inject the equivalent provider:
+
+```python
+from anthropic import Anthropic
+
+from app.anthropic_youtube_visuals import AnthropicYouTubeVisualPlanner
+
+planner = AnthropicYouTubeVisualPlanner(client=Anthropic(), model="claude-sonnet-4-5")
+```
+
+The model can also be selected with `ANTHROPIC_MODEL`. Real Anthropic text-generation calls may
+incur charges; never commit `ANTHROPIC_API_KEY` or a populated `.env`.
 
 ## YouTube scene image generation
 
@@ -974,6 +1142,12 @@ supports the project size `1792x1024`. Real generation incurs API charges. Never
 This feature performs no overlay rasterization, character-reference conditioning, OCR/vision QA,
 resizing/cropping, Seedance/Veo generation, TTS, subtitles, Premiere integration, database
 persistence, or YouTube upload.
+
+Anthropic has no Images API equivalent, so there is no `AnthropicSceneImageGenerator`. When
+`SCHEDULER_PROVIDER=anthropic`, every text stage above runs on Claude but scene image generation
+still uses `LocalSceneImageGenerator` (deterministic placeholder PNGs). To get real generated scene
+images alongside Claude-authored text, inject `OpenAISceneImageGenerator` directly into
+`ProductionProviders.image_generator` instead of relying on the scheduler's built-in wiring.
 
 ## Run tests
 

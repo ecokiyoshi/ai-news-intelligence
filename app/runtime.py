@@ -17,12 +17,27 @@ from types import FrameType
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from anthropic import Anthropic
 from apscheduler.schedulers.background import BackgroundScheduler
 from openai import OpenAI
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.anthropic_scorer import AnthropicScorer
+from app.anthropic_summarizer import AnthropicSummarizer
+from app.anthropic_youtube_dialogue import AnthropicYouTubeDialogueConverter
+from app.anthropic_youtube_ideas import AnthropicYouTubeIdeaGenerator
+from app.anthropic_youtube_packaging import (
+    AnthropicYouTubePackagingEvaluator,
+    AnthropicYouTubePackagingGenerator,
+)
+from app.anthropic_youtube_potential import AnthropicYouTubePotentialScorer
+from app.anthropic_youtube_script import (
+    AnthropicYouTubeOutlineGenerator,
+    AnthropicYouTubeScriptGenerator,
+)
+from app.anthropic_youtube_visuals import AnthropicYouTubeVisualPlanner
 from app.database import create_db_engine, init_db
 from app.openai_scorer import OpenAIScorer
 from app.openai_summarizer import OpenAISummarizer
@@ -128,14 +143,20 @@ class RuntimeConfig:
             raise ValueError("SCHEDULER_INTERVAL_SECONDS must be positive and finite")
 
         provider = values.get("SCHEDULER_PROVIDER", "local").strip().lower()
-        if provider not in {"local", "openai"}:
-            raise ValueError("SCHEDULER_PROVIDER must be 'local' or 'openai'")
+        if provider not in {"local", "openai", "anthropic"}:
+            raise ValueError("SCHEDULER_PROVIDER must be 'local', 'openai', or 'anthropic'")
         if (
             require_pipeline
             and provider == "openai"
             and not values.get("OPENAI_API_KEY", "").strip()
         ):
             raise ValueError("OPENAI_API_KEY is required when SCHEDULER_PROVIDER=openai")
+        if (
+            require_pipeline
+            and provider == "anthropic"
+            and not values.get("ANTHROPIC_API_KEY", "").strip()
+        ):
+            raise ValueError("ANTHROPIC_API_KEY is required when SCHEDULER_PROVIDER=anthropic")
 
         pipeline_mode = values.get("PIPELINE_MODE", "news").strip().lower()
         if pipeline_mode not in {"news", "end_to_end"}:
@@ -242,6 +263,24 @@ def build_runtime_runner(config: RuntimeConfig) -> Callable[[], object]:
             dialogue_converter=OpenAIYouTubeDialogueConverter(client=client),
             visual_planner=OpenAIYouTubeVisualPlanner(client=client),
             image_generator=OpenAISceneImageGenerator(client=client),
+        )
+    elif config.provider == "anthropic":
+        # Anthropic has no Images API equivalent, so scene image generation falls back to
+        # the deterministic local generator even though every text stage uses Claude.
+        client = Anthropic()
+        providers = ProductionProviders(
+            summarizer=AnthropicSummarizer(client=client),
+            news_scorer=AnthropicScorer(client=client),
+            text_provider=MetadataTextProvider(),
+            idea_generator=AnthropicYouTubeIdeaGenerator(client=client),
+            potential_scorer=AnthropicYouTubePotentialScorer(client=client),
+            packaging_generator=AnthropicYouTubePackagingGenerator(client=client),
+            packaging_evaluator=AnthropicYouTubePackagingEvaluator(client=client),
+            outline_generator=AnthropicYouTubeOutlineGenerator(client=client),
+            script_generator=AnthropicYouTubeScriptGenerator(client=client),
+            dialogue_converter=AnthropicYouTubeDialogueConverter(client=client),
+            visual_planner=AnthropicYouTubeVisualPlanner(client=client),
+            image_generator=LocalSceneImageGenerator(),
         )
     else:
         providers = ProductionProviders(
