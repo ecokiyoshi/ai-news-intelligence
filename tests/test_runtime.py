@@ -67,7 +67,7 @@ def test_explicit_database_url_takes_precedence(tmp_path: Path) -> None:
         ("SCHEDULER_INTERVAL_SECONDS", "0", "must be positive"),
         ("SCHEDULER_INTERVAL_SECONDS", "nan", "must be positive"),
         ("SCHEDULER_INTERVAL_SECONDS", "never", "must be a number"),
-        ("SCHEDULER_PROVIDER", "unknown", "must be 'local' or 'openai'"),
+        ("SCHEDULER_PROVIDER", "unknown", "must be 'local', 'openai', or 'anthropic'"),
         ("TZ", "Not/A-Timezone", "unknown TZ"),
         ("PIPELINE_MODE", "unknown", "PIPELINE_MODE"),
         ("PIPELINE_NEWS_LIMIT", "0", "positive integer"),
@@ -95,6 +95,35 @@ def test_openai_provider_requires_api_key_but_local_provider_does_not(
     RuntimeConfig.from_env(
         environment(tmp_path, SCHEDULER_PROVIDER="openai"), require_pipeline=False
     )
+
+
+def test_anthropic_provider_requires_api_key(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+        RuntimeConfig.from_env(environment(tmp_path, SCHEDULER_PROVIDER="anthropic"))
+
+    config = RuntimeConfig.from_env(
+        environment(
+            tmp_path,
+            SCHEDULER_PROVIDER="anthropic",
+            ANTHROPIC_API_KEY="test-placeholder",
+        )
+    )
+    assert config.provider == "anthropic"
+
+    RuntimeConfig.from_env(
+        environment(tmp_path, SCHEDULER_PROVIDER="anthropic"), require_pipeline=False
+    )
+
+
+def test_anthropic_mode_accepts_the_default_image_size(tmp_path: Path) -> None:
+    config = RuntimeConfig.from_env(
+        environment(
+            tmp_path,
+            SCHEDULER_PROVIDER="anthropic",
+            ANTHROPIC_API_KEY="test-placeholder",
+        )
+    )
+    assert config.image_size == "1792x1024"
 
 
 def test_end_to_end_mode_requires_channel_focus(tmp_path: Path) -> None:

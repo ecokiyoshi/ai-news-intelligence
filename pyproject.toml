@@ -9,6 +9,7 @@ description = "AI News Intelligence backend"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "anthropic>=0.40,<1.0",
     "apscheduler>=3.11,<4.0",
     "fastapi>=0.116,<1.0",
     "feedparser>=6.0,<7.0",
