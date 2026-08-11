@@ -104,6 +104,86 @@ def test_repeated_run_skips_duplicates_and_provider_calls(pipeline_db) -> None:
     assert len(summarizer.calls) == len(scorer.calls) == 2
 
 
+def test_limit_caps_provider_processing_and_defers_remaining_articles(pipeline_db) -> None:
+    _, sessions = pipeline_db
+    feeds = {"feed": feed(*(f"Article {index}" for index in range(12)))}
+    summarizer = CountingSummarizer()
+    scorer = CountingScorer()
+    with sessions() as session:
+        first = run_local(
+            session,
+            feeds,
+            limit=3,
+            summarizer=summarizer,
+            scorer=scorer,
+        )
+        second = run_local(
+            session,
+            feeds,
+            limit=3,
+            summarizer=summarizer,
+            scorer=scorer,
+        )
+        articles = list(session.scalars(select(NewsArticle).order_by(NewsArticle.id)))
+
+    assert (first.articles_summarized, first.articles_scored) == (3, 3)
+    assert (second.articles_summarized, second.articles_scored) == (3, 3)
+    assert len(summarizer.calls) == len(scorer.calls) == 6
+    assert all(article.summary is not None for article in articles[:6])
+    assert all(article.summary is None for article in articles[6:])
+
+
+def test_processed_articles_do_not_consume_provider_processing_limit(pipeline_db) -> None:
+    _, sessions = pipeline_db
+    summarizer = CountingSummarizer()
+    scorer = CountingScorer()
+    with sessions() as session:
+        session.add(
+            NewsArticle(
+                title="Already processed",
+                url="https://example.com/already-processed",
+                source="Example News",
+                summary="Existing summary",
+                summarized_at=datetime.now(timezone.utc),
+                importance_score=50,
+                relevance_score=60,
+                score_reason="Existing score",
+                scored_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+        result = run_local(
+            session,
+            {"feed": feed("First new", "Second new", "Third new")},
+            limit=2,
+            summarizer=summarizer,
+            scorer=scorer,
+        )
+
+    assert (result.articles_summarized, result.articles_scored) == (2, 2)
+    assert len(summarizer.calls) == len(scorer.calls) == 2
+
+
+def test_limit_caps_forced_provider_reprocessing(pipeline_db) -> None:
+    _, sessions = pipeline_db
+    summarizer = CountingSummarizer()
+    scorer = CountingScorer()
+    with sessions() as session:
+        run_local(session, {"feed": feed("One", "Two", "Three", "Four")})
+        result = run_local(
+            session,
+            {"feed": feed("One", "Two", "Three", "Four")},
+            limit=2,
+            summarizer=summarizer,
+            scorer=scorer,
+            force_resummarize=True,
+            force_rescore=True,
+        )
+
+    assert (result.articles_summarized, result.articles_scored) == (2, 2)
+    assert len(summarizer.calls) == len(scorer.calls) == 2
+
+
 def test_existing_processing_is_skipped_and_force_flags_reprocess(pipeline_db) -> None:
     _, sessions = pipeline_db
     summarizer = CountingSummarizer()
@@ -197,7 +277,7 @@ def test_ranking_options_apply_to_successful_articles(pipeline_db) -> None:
         result = run_local(
             session,
             feeds,
-            limit=3,
+            limit=5,
             minimum_priority_score=80,
             max_per_source=1,
         )

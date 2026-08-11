@@ -106,6 +106,10 @@ YOUTUBE_SCENE_LIMIT=50
 YOUTUBE_IMAGE_SIZE=1792x1024
 ```
 
+`PIPELINE_NEWS_LIMIT` is a hard per-run provider-call guard as well as the final priority-news
+selection limit. At most that many articles are sent through summarization and scoring in one run;
+additional unprocessed articles remain stored for later runs.
+
 `SCHEDULER_PROVIDER=local` follows the entire route deterministically, needs no API key, and writes
 valid placeholder PNGs. `SCHEDULER_PROVIDER=openai` connects every existing OpenAI text adapter and
 the existing Images API adapter. It requires `OPENAI_API_KEY`, respects `OPENAI_MODEL` and
