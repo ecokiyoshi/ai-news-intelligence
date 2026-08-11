@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import feedparser
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import NewsArticle
@@ -138,7 +138,17 @@ def run_pipeline(
         parser=feed_parser,
     )
 
-    articles = list(session.scalars(select(NewsArticle).order_by(NewsArticle.id)))
+    processing_candidates = select(NewsArticle).order_by(NewsArticle.id).limit(limit)
+    if not force_resummarize and not force_rescore:
+        processing_candidates = processing_candidates.where(
+            or_(
+                NewsArticle.summary.is_(None),
+                func.trim(NewsArticle.summary) == "",
+                NewsArticle.importance_score.is_(None),
+                NewsArticle.relevance_score.is_(None),
+            )
+        )
+    articles = list(session.scalars(processing_candidates))
     summarized = 0
     scored = 0
     failed = 0

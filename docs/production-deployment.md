@@ -60,6 +60,8 @@ Set every empty value required by the selected pipeline, especially:
 - `YOUTUBE_CHANNEL_FOCUS`: required for `PIPELINE_MODE=end_to_end`.
 
 The example defaults production to `SCHEDULER_PROVIDER=openai` and `PIPELINE_MODE=end_to_end`.
+`PIPELINE_NEWS_LIMIT` caps both the number of articles summarized/scored per run and the final
+priority-news selection, so a large first feed import cannot create unbounded text-provider calls.
 `YOUTUBE_SCENE_LIMIT=50` is a hard pre-request cost guard; lower it before the first production run
 if desired. `OPENAI_MODEL`, `OPENAI_IMAGE_MODEL`, item counts, interval, image size, and `TZ` can be
 changed in `.env`. Never commit `.env` or paste it into logs.
