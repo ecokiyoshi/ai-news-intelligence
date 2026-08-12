@@ -951,18 +951,21 @@ The model can also be selected with `ANTHROPIC_MODEL`. Real calls may incur char
 Dialogue conversion is a transformation layer after the completed long-form script:
 
 ```text
-15-minute narration → dialogue conversion → さび助×ハル chapter dialogue
+English source structure → fact extraction and deduplication → reorganized 7–10 minute さび助×ハル dialogue
 ```
 
-By default, さび助 is the calm primary explainer who carries most factual and technical context.
-ハル is the audience proxy and learner who asks short useful questions, requests clarification,
-and occasionally summarizes understanding. Conversation should sound natural rather than alternate
-mechanically after every sentence, and repetitive filler reactions should be avoided.
+さび助 and ハル speak like close friends, using casual spoken Japanese rather than default
+です／ます narration, formal news-anchor phrasing, or a teacher–student hierarchy. ハル asks short
+viewer-perspective questions, reacts, and naturally leads into the next question. さび助 answers
+briefly like a knowledgeable friend. Technical terminology remains available, with a short casual
+explanation when it first appears. Polite language is not completely banned where it is natural,
+such as an opening greeting or a direct address to viewers.
 
-`YouTubeDialogueSource` copies the validated `YouTubeScript` metadata, chapters, narration,
-closing, and SEO keywords. Each `DialogueLine` has a sequential line index, configured speaker, and
-text. Every `DialogueChapter` preserves the corresponding source chapter index and title exactly,
-and `YouTubeDialogueScript` combines opening lines, all chapter conversations, and closing lines.
+`YouTubeDialogueSource` keeps the source facts and structure as input context, but that structure is
+not the output contract. Source chapter count does not equal Japanese chapter count. The converter
+may merge, split, reorder, or omit repetitive source chapters, and output chapters use their own
+sequential indexes. A 12-chapter source can therefore become a much clearer five-chapter Japanese
+video. The Japanese edition targets 7–10 minutes and caps longer source targets at 10 minutes.
 Only the two configured characters may speak, and both must appear.
 
 ```python
@@ -978,10 +981,9 @@ dialogue = convert_youtube_script_to_dialogue(
 )
 ```
 
-The local converter is deterministic, offline, and preserves each source narration as the
-explainer's factual exposition. Runtime remains approximate, not guaranteed. The complete spoken
-text is evaluated with the existing Japanese-character/English-word estimator and a default ±25%
-tolerance around the source target.
+The local converter remains a deterministic offline fallback. Provider-backed Japanese rewriting
+uses the independent 7–10 minute target. Runtime remains approximate and is checked with the
+existing Japanese-character/English-word estimator and a default ±25% tolerance.
 
 For OpenAI-backed conversion, inject the typed Responses API provider:
 

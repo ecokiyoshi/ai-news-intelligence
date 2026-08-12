@@ -4,6 +4,7 @@ from typing import cast
 import pytest
 
 from app.openai_youtube_dialogue import (
+    YOUTUBE_DIALOGUE_INSTRUCTIONS,
     OpenAIDialogueChapter,
     OpenAIDialogueLine,
     OpenAIDialogueChapterSupplement,
@@ -49,7 +50,7 @@ def source():
     script_source = build_youtube_script_source(idea, potential, packaging)
     script = generate_youtube_script(
         script_source, LocalYouTubeOutlineGenerator(), LocalYouTubeScriptGenerator(),
-        channel_focus="AI news", target_minutes=15,
+        channel_focus="AI news", target_minutes=10,
     )
     return build_youtube_dialogue_source(script)
 
@@ -130,7 +131,7 @@ def sufficient_supplement(parsed: OpenAIYouTubeDialogueResponse | None = None):
         OpenAIDialogueChapterSupplement(
             chapter_index=chapter.chapter_index,
             lines=[OpenAIDialogueLine(
-                line_index=len(chapter.lines), speaker="さび助", text=" ".join(["detail"] * 280),
+                line_index=len(chapter.lines), speaker="さび助", text=" ".join(["detail"] * 180),
             )],
         )
         for chapter in parsed.chapters
@@ -154,15 +155,32 @@ def test_openai_converter_uses_typed_responses_and_complete_paired_context() -> 
     assert call["text_format"] is OpenAIYouTubeDialogueResponse
     for expected in (
         "AI news", "さび助", "ハル", "primary calm", "audience proxy",
-        "AI Release Explained", "WHAT CHANGED", '"target_minutes":15',
+        "AI Release Explained", "WHAT CHANGED", '"japanese_target_minutes":10',
         "A model was released", '"chapter_index":0', "Why it matters",
         "Explain", "Background", '"estimated_seconds"', '"key_points"',
         '"narration"', '"closing"', '"seo_keywords"',
-        '"whole_script_target":4200', '"whole_script_minimum":3150',
-        '"whole_script_maximum":5250', '"chapter_targets"',
+        '"whole_script_target":2800', '"whole_script_minimum":2100',
+        '"whole_script_maximum":3500',
     ):
         assert expected in call["input"]
     assert len(client.responses.calls) == 1
+
+
+def test_prompt_allows_chapter_reorganization_and_rejects_one_to_one_translation() -> None:
+    instructions = YOUTUBE_DIALOGUE_INSTRUCTIONS
+    assert "Do not preserve the source chapter count" in instructions
+    assert "9, 10, 15, 20" in instructions
+    assert "Do not map" in instructions and "one-to-one" in instructions
+    assert all(word in instructions for word in ("Merge", "split", "reorder", "remove"))
+
+
+def test_prompt_requires_friendly_spoken_japanese() -> None:
+    instructions = YOUTUBE_DIALOGUE_INSTRUCTIONS
+    assert "close friends" in instructions
+    assert "Do not use formal Japanese" in instructions
+    assert "sounds natural aloud" in instructions
+    assert "Haru asks short casual" in instructions
+    assert "knowledgeable friend rather than a lecturer" in instructions
 
 
 def test_openai_converter_supplements_only_short_chapters_and_preserves_existing() -> None:
@@ -256,7 +274,7 @@ def test_openai_converter_shortens_an_overlong_dialogue_once() -> None:
     ).convert(source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS)
     assert result.title == "AI Release Explained"
     assert len(responses.calls) == 2
-    assert "must not exceed 5250 Japanese" in responses.calls[1]["instructions"]
+    assert "must not exceed 3500 Japanese" in responses.calls[1]["instructions"]
 
 
 def test_openai_converter_propagates_supplement_provider_exception() -> None:

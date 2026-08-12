@@ -17,6 +17,7 @@ from app.youtube_dialogue import (
     validate_dialogue_chapter,
     validate_dialogue_line,
     validate_dialogue_script,
+    validate_dialogue_structure,
 )
 from app.youtube_ideas import YouTubeIdea
 from app.youtube_packaging import YouTubePackagingCandidate
@@ -158,7 +159,7 @@ def test_dialogue_rejects_bad_chapter_coverage_or_order(kind: str) -> None:
     elif kind == "duplicate": chapters[2] = chapters[1]
     elif kind == "unknown": chapters[-1] = replace(chapters[-1], chapter_index=99)
     else: chapters[1], chapters[2] = chapters[2], chapters[1]
-    with pytest.raises(ValueError, match="order and coverage"):
+    with pytest.raises(ValueError, match="sequential from zero"):
         validate_dialogue_script(
             replace(dialogue, chapters=chapters), build_youtube_dialogue_source(source_script())
         )
@@ -268,6 +269,38 @@ def test_service_rejects_second_non_japanese_provider_dialogue() -> None:
             source_script(), converter, channel_focus="AI news"
         )
     assert converter.calls == 2
+
+
+def test_twelve_source_chapters_can_be_reorganized_into_five_japanese_chapters() -> None:
+    base_source = build_youtube_dialogue_source(source_script())
+    source_chapters = [
+        replace(base_source.chapters[index % len(base_source.chapters)], chapter_index=index)
+        for index in range(12)
+    ]
+    source_sections = [
+        replace(base_source.narration_sections[index % len(base_source.narration_sections)], chapter_index=index)
+        for index in range(12)
+    ]
+    twelve_chapter_source = replace(
+        base_source,
+        target_minutes=22,
+        chapters=source_chapters,
+        narration_sections=source_sections,
+    )
+    base_dialogue = local_dialogue()
+    reorganized = replace(
+        base_dialogue,
+        target_minutes=10,
+        chapters=[
+            replace(chapter, chapter_index=index, title=f"再構成 {index + 1}")
+            for index, chapter in enumerate(base_dialogue.chapters[:5])
+        ],
+    )
+
+    validated = validate_dialogue_structure(reorganized, twelve_chapter_source)
+    assert len(twelve_chapter_source.chapters) == 12
+    assert len(validated.chapters) == 5
+    assert [chapter.chapter_index for chapter in validated.chapters] == list(range(5))
 
 
 def test_custom_character_names_are_supported() -> None:
