@@ -247,15 +247,16 @@ def test_openai_converter_reports_overlong_supplement_without_retrying() -> None
     assert len(responses.calls) == 2
 
 
-def test_openai_converter_does_not_supplement_an_overlong_dialogue() -> None:
+def test_openai_converter_shortens_an_overlong_dialogue_once() -> None:
     parsed = valid_response()
     parsed.chapters[0].lines[1].text = " ".join(["detail"] * 3000)
-    client = FakeClient(parsed)
-    with pytest.raises(ValueError, match="exceeds the configured maximum"):
-        OpenAIYouTubeDialogueConverter(client=client).convert(
-            source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS
-        )
-    assert len(client.responses.calls) == 1
+    responses = SequencedFakeResponses(parsed, valid_response())
+    result = OpenAIYouTubeDialogueConverter(
+        client=SimpleNamespace(responses=responses)
+    ).convert(source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS)
+    assert result.title == "AI Release Explained"
+    assert len(responses.calls) == 2
+    assert "must not exceed 5250 Japanese" in responses.calls[1]["instructions"]
 
 
 def test_openai_converter_propagates_supplement_provider_exception() -> None:

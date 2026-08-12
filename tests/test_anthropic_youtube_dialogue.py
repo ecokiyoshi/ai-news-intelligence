@@ -209,15 +209,16 @@ def test_anthropic_converter_reports_overlong_supplement_without_retrying() -> N
     assert len(messages.calls) == 2
 
 
-def test_anthropic_converter_does_not_supplement_an_overlong_dialogue() -> None:
+def test_anthropic_converter_shortens_an_overlong_dialogue_once() -> None:
     parsed = valid_response()
     parsed.chapters[0].lines[1].text = " ".join(["detail"] * 3000)
-    client = FakeClient(parsed)
-    with pytest.raises(ValueError, match="exceeds the configured maximum"):
-        AnthropicYouTubeDialogueConverter(client=client).convert(
-            source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS
-        )
-    assert len(client.messages.calls) == 1
+    messages = SequencedMessages([parsed, valid_response()])
+    result = AnthropicYouTubeDialogueConverter(
+        client=SimpleNamespace(messages=messages)
+    ).convert(source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS)
+    assert result.title == "AI Release Explained"
+    assert len(messages.calls) == 2
+    assert "must not exceed 5250 Japanese" in messages.calls[1]["system"]
 
 
 def test_anthropic_converter_propagates_supplement_provider_exception() -> None:
