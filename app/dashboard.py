@@ -332,6 +332,27 @@ def _gallery_html(run_id: str, data: dict[str, Any]) -> str:
     return f'<div class="gallery">{"".join(cards)}</div>' if cards else '<p class="muted">No generated images are available.</p>'
 
 
+def _audio_html(run_id: str) -> str:
+    audio_dir = _run_directory(run_id) / "audio"
+    try:
+        manifest = json.loads((audio_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        manifest = {}
+    players = []
+    for item in map(_dict, _list(manifest.get("segments"))):
+        filename = item.get("file")
+        if isinstance(filename, str) and (audio_dir / filename).is_file():
+            url = f'/api/projects/{quote(run_id, safe="")}/audio/{quote(filename, safe="")}'
+            players.append(f'<div class="line"><div class="speaker">{_e(item.get("display_name"))}</div><audio controls preload="none" src="{url}"></audio></div>')
+    merged = manifest.get("merged_audio")
+    merged_player = ""
+    if isinstance(merged, str) and (audio_dir / merged).is_file():
+        url = f'/api/projects/{quote(run_id, safe="")}/audio/{quote(merged, safe="")}'
+        merged_player = f'<h3>Complete dialogue</h3><audio controls preload="metadata" src="{url}"></audio>'
+    status = _e(manifest.get("status"), "not generated")
+    return f'''<p>Status: <strong id="audio-status">{status}</strong></p><button class="copy" style="float:none" onclick="generateAudio()">音声生成</button>{merged_player}{"".join(players)}<script>async function generateAudio(){{const s=document.getElementById("audio-status");s.textContent="generating";try{{const r=await fetch("/api/projects/{quote(run_id, safe='')}/audio/generate",{{method:"POST",headers:{{"content-type":"application/json"}},body:JSON.stringify({{force:false,merge:true}})}});const j=await r.json();if(!r.ok)throw new Error(j.detail||"generation failed");location.reload()}}catch(e){{s.textContent="failed: "+e.message}}}}</script>'''
+
+
 @router.get("/dashboard/runs/{run_id}", response_class=HTMLResponse)
 def run_detail(run_id: str) -> HTMLResponse:
     data = load_run(run_id)
@@ -342,6 +363,7 @@ def run_detail(run_id: str) -> HTMLResponse:
         ("packaging", "Packaging", _structured_fields(data.get("selected_packaging"))),
         ("script", "15-Minute YouTube Script", _script_html(data.get("script"))),
         ("dialogue", "さび助 × ハル Dialogue", _dialogue_html(data.get("dialogue"))),
+        ("audio", "Dialogue Audio", _audio_html(run_id)),
         ("visuals", "Visual Plan", _visual_html(data.get("visual_plan"))),
         ("images", "Generated Images", _gallery_html(run_id, data)),
         ("json", "Raw JSON", f'<pre class="raw">{html.escape(json.dumps(data, ensure_ascii=False, indent=2))}</pre>'),

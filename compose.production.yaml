@@ -54,10 +54,17 @@ services:
     restart: unless-stopped
     environment:
       OUTPUT_DIR: /data/outputs
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_SABISUKE_VOICE_ID: ${ELEVENLABS_SABISUKE_VOICE_ID:-}
+      ELEVENLABS_HARU_VOICE_ID: ${ELEVENLABS_HARU_VOICE_ID:-}
+      ELEVENLABS_MODEL_ID: ${ELEVENLABS_MODEL_ID:-eleven_v3}
+      ELEVENLABS_OUTPUT_FORMAT: ${ELEVENLABS_OUTPUT_FORMAT:-mp3_44100_128}
+      ELEVENLABS_DIALOGUE_GAP_MS: ${ELEVENLABS_DIALOGUE_GAP_MS:-200}
     volumes:
-      - generated_outputs:/data/outputs:ro
+      - generated_outputs:/data/outputs
     networks:
       - app_internal
+      - scheduler_egress
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 30s

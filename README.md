@@ -1,5 +1,13 @@
 # AI News Intelligence
 
+## ElevenLabs Japanese dialogue audio
+
+Completed `run.json` dialogue can be synthesized as separate voices for さび助 and ハル. Set `ELEVENLABS_API_KEY`, `ELEVENLABS_SABISUKE_VOICE_ID`, and `ELEVENLABS_HARU_VOICE_ID` as runtime secrets; never commit a populated `.env`. Optional settings are documented in `.env.example`.
+
+Generate with `python -m app.audio generate --project-id RUN_ID --merge`; add `--force` to regenerate every segment. The project dashboard offers the same action and audio players. The HTTP endpoint is `POST /api/projects/{project_id}/audio/generate` with `{"force": false, "merge": true}`.
+
+Output is stored under `OUTPUT_DIR/RUN_ID/audio/` as numbered MP3 files and `manifest.json`; optional merged output is `dialogue_full.mp3`. Matching speaker/text/model segments are reused, and completed progress remains available after a later segment fails.
+
 Backend foundation for AI News Intelligence, built with Python and FastAPI.
 
 ## Production deployment
