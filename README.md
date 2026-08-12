@@ -1,5 +1,13 @@
 # AI News Intelligence
 
+## ElevenLabs Japanese dialogue audio
+
+Completed `run.json` dialogue can be synthesized as separate voices for さび助 and ハル. Set `ELEVENLABS_API_KEY`, `ELEVENLABS_SABISUKE_VOICE_ID`, and `ELEVENLABS_HARU_VOICE_ID` as runtime secrets; never commit a populated `.env`. Optional settings are documented in `.env.example`.
+
+Generate with `python -m app.audio generate --project-id RUN_ID --merge`; add `--force` to regenerate every segment. The project dashboard offers the same action and audio players. The HTTP endpoint is `POST /api/projects/{project_id}/audio/generate` with `{"force": false, "merge": true}`.
+
+Output is stored under `OUTPUT_DIR/RUN_ID/audio/` as numbered MP3 files and `manifest.json`; optional merged output is `dialogue_full.mp3`. Matching speaker/text/model segments are reused, and completed progress remains available after a later segment fails.
+
 Backend foundation for AI News Intelligence, built with Python and FastAPI.
 
 ## Production deployment
@@ -508,190 +516,7 @@ calls, so it adds no OpenAI API usage charges.
 The reusable single-run pipeline orchestrates the existing services in this order:
 
 ```text
-RSS collection → persistence → summarization → scoring → ranking → priority selection
-```
-
-Providers and a SQLAlchemy session are injected by the caller. The required `relevance_target` is
-passed to the scorer and is never hard-coded. `MetadataTextProvider` offers a deterministic local
-text strategy using the stored title and, when available, the existing summary. It does not fetch,
-scrape, or claim to provide the full article body.
-
-```python
-from sqlalchemy.orm import Session
-
-from app.database import engine
-from app.pipeline import MetadataTextProvider, run_pipeline
-from app.scoring import LocalScorer
-from app.summarization import LocalSummarizer
-
-with Session(engine) as session:
-    result = run_pipeline(
-        ["https://example.com/feed.xml"],
-        "AI industry and model releases",
-        LocalSummarizer(),
-        LocalScorer(),
-        MetadataTextProvider(),
-        session,
-        limit=10,
-        minimum_priority_score=70,
-        max_per_source=2,
-        importance_weight=0.6,
-        relevance_weight=0.4,
-    )
-    print(result.priority_articles)
-```
-
-By default, articles with an existing summary are not summarized again, and articles with both
-scores are not rescored. Explicit `force_resummarize=True` and `force_rescore=True` options enable
-reprocessing. One article-level provider failure is counted and does not stop other articles.
-
-The pipeline is also compatible with injected `OpenAISummarizer` and `OpenAIScorer` instances.
-Construct those providers outside `run_pipeline`; real OpenAI calls may incur API charges and need
-`OPENAI_API_KEY`. The pipeline itself reads no secrets. This is an on-demand, single-run workflow;
-it does not add scheduling, background workers, or web scraping.
-
-## Scheduled news pipeline
-
-`NewsPipelineScheduler` periodically invokes an injected, existing pipeline runner in-process. The
-default interval is 3,600 seconds (60 minutes); pass `interval_seconds` to change it. Importing or
-constructing the scheduler does not register work, start a thread, or run the pipeline.
-
-```python
-from app.database import SessionLocal
-from app.pipeline import MetadataTextProvider
-from app.scheduler import NewsPipelineScheduler, build_pipeline_runner
-from app.scoring import LocalScorer
-from app.summarization import LocalSummarizer
-
-runner = build_pipeline_runner(
-    SessionLocal,
-    ["https://example.com/feed.xml"],
-    "AI industry and model releases",
-    LocalSummarizer(),
-    LocalScorer(),
-    MetadataTextProvider(),
-)
-scheduler = NewsPipelineScheduler(runner, interval_seconds=3600)
-
-# Manual execution works without starting the schedule.
-result = scheduler.run_once()
-
-# Background scheduling is always explicit.
-scheduler.start()
-# On application shutdown:
-scheduler.shutdown()
-```
-
-`build_pipeline_runner` creates and closes a fresh SQLAlchemy session for every run; it never
-shares one long-lived session with the scheduler thread. The scheduler catches failed pipeline runs
-so a later interval can try again. A non-blocking application lock prevents a manual and scheduled
-run from overlapping, and repeated `start()` calls do not create duplicate jobs.
-
-The overlap lock protects only one Python process. It is not a distributed lock for multiple
-processes or containers. Summarizers, scorers, feeds, relevance targets, and text providers remain
-caller-injected; scheduler code constructs no OpenAI client and reads no API key. Scheduled use of
-real OpenAI providers can generate recurring API charges. Never commit API keys or populated
-environment files.
-
-## YouTube idea generation
-
-YouTube idea generation converts existing ranking output into compact, provider-independent
-context and structured video concepts:
-
-```text
-priority news → YouTubeIdeaSource → generator → YouTubeIdea
-```
-
-`YouTubeIdeaSource` contains only the matched article ID, title, optional summary, source,
-publication time, stored importance/relevance scores, and the existing `RankingResult` priority
-score. It does not recalculate ranking. `channel_focus` is a required caller-supplied topic, while
-`idea_count` defaults to 3 and accepts positive integers up to 10.
-
-```python
-from app.youtube_ideas import (
-    LocalYouTubeIdeaGenerator,
-    build_youtube_idea_sources,
-    generate_youtube_ideas,
-)
-
-sources = build_youtube_idea_sources(priority_articles, articles)
-ideas = generate_youtube_ideas(
-    sources,
-    LocalYouTubeIdeaGenerator(),
-    channel_focus="drone technology and regulation",
-    idea_count=3,
-)
-```
-
-The deterministic local generator needs no network or API key. Each `YouTubeIdea` includes source
-article IDs, title, hook, editorial angle, target audience, estimated length, thumbnail text,
-chapters, and SEO keywords.
-
-For OpenAI-backed generation, construct and inject `OpenAIYouTubeIdeaGenerator` in the same way as
-the other OpenAI providers:
-
-```python
-from openai import OpenAI
-
-from app.openai_youtube_ideas import OpenAIYouTubeIdeaGenerator
-
-generator = OpenAIYouTubeIdeaGenerator(client=OpenAI(), model="gpt-5.5")
-```
-
-The OpenAI provider uses Responses API typed structured output. Real calls may incur charges;
-never commit `OPENAI_API_KEY`. Ideas are not persisted yet. This feature does not add YouTube
-potential scoring, news clustering, script generation, image generation, or YouTube publishing.
-
-For Claude-backed generation, construct and inject `AnthropicYouTubeIdeaGenerator` the same way:
-
-```python
-from anthropic import Anthropic
-
-from app.anthropic_youtube_ideas import AnthropicYouTubeIdeaGenerator
-
-generator = AnthropicYouTubeIdeaGenerator(client=Anthropic(), model="claude-sonnet-4-5")
-```
-
-The Claude provider forces a single structured tool call on the Anthropic Messages API. Real calls
-may incur charges; never commit `ANTHROPIC_API_KEY`.
-
-## YouTube Potential Score
-
-YouTube Potential Score evaluates whether a generated `YouTubeIdea` is promising as a video
-concept. It is independent from news importance, relevance, and priority scores and does not modify
-or recalculate them. Providers return five 0–100 dimensions, while provider-independent core code
-calculates the final score:
-
-```text
-youtube_potential_score =
-    topic_appeal × 0.30
-    + clarity × 0.20
-    + surprise × 0.20
-    + searchability × 0.15
-    + visual_explainability × 0.15
-```
-
-The dimensions measure topic appeal, explanatory clarity, truthful surprise/hook strength,
-searchability, and suitability for visual explanation. Weights are configurable, but each must be
-finite and between 0 and 1, and together they must equal 1.
-
-```python
-from app.youtube_potential import (
-    LocalYouTubePotentialScorer,
-    rank_youtube_ideas,
-    score_youtube_ideas,
-    select_top_youtube_ideas,
-)
-
-potential = score_youtube_ideas(
-    ideas,
-    LocalYouTubePotentialScorer(),
-    channel_focus="drone technology and regulation",
-)
-ranked = rank_youtube_ideas(ideas, potential)
-top = select_top_youtube_ideas(
-    ranked,
-    limit=3,
+RSS collection → persistence → summarization…1770 tokens truncated…it=3,
     minimum_potential_score=80,
 )
 ```
