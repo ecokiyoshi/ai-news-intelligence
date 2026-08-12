@@ -280,7 +280,8 @@ class OpenAIYouTubeDialogueConverter:
         parsed = _parsed_output(response)
         if not isinstance(parsed, OpenAIYouTubeDialogueResponse):
             raise ValueError("OpenAI response did not contain shortened parsed dialogue")
-        return validate_dialogue_structure(_to_dialogue_script(parsed, source), source, characters)
+        shortened = _to_dialogue_script(parsed, source, script.target_minutes)
+        return validate_dialogue_structure(shortened, source, characters)
 
     def _supplement_short_dialogue(
         self,

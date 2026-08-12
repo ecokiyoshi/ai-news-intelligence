@@ -243,7 +243,8 @@ class AnthropicYouTubeDialogueConverter:
             input_text=json.dumps({"dialogue": script.__dict__}, ensure_ascii=False, default=lambda value: value.__dict__),
             response_model=AnthropicYouTubeDialogueResponse,
         )
-        return validate_dialogue_structure(_to_dialogue_script(parsed, source), source, characters)
+        shortened = _to_dialogue_script(parsed, source, script.target_minutes)
+        return validate_dialogue_structure(shortened, source, characters)
 
     def _supplement_short_dialogue(
         self,
