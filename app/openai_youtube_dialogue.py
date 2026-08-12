@@ -114,6 +114,23 @@ def _duration_targets(source: YouTubeDialogueSource) -> tuple[bool, int, int, in
     return japanese, target, minimum, maximum
 
 
+def _to_dialogue_script(
+    parsed: OpenAIYouTubeDialogueResponse, source: YouTubeDialogueSource
+) -> YouTubeDialogueScript:
+    return YouTubeDialogueScript(
+        title=source.title,
+        thumbnail_text=source.thumbnail_text,
+        target_minutes=source.target_minutes,
+        opening_lines=[DialogueLine(line.line_index, line.speaker, line.text) for line in parsed.opening_lines],
+        chapters=[DialogueChapter(
+            chapter.chapter_index, chapter.title,
+            [DialogueLine(line.line_index, line.speaker, line.text) for line in chapter.lines],
+        ) for chapter in parsed.chapters],
+        closing_lines=[DialogueLine(line.line_index, line.speaker, line.text) for line in parsed.closing_lines],
+        seo_keywords=source.seo_keywords,
+    )
+
+
 class OpenAIYouTubeDialogueConverter:
     """Convert supplied narration using typed OpenAI Responses API output."""
 
@@ -208,37 +225,18 @@ class OpenAIYouTubeDialogueConverter:
         parsed = _parsed_output(response)
         if not isinstance(parsed, OpenAIYouTubeDialogueResponse):
             raise ValueError("OpenAI response did not contain parsed dialogue")
-        script = YouTubeDialogueScript(
-            title=source.title,
-            thumbnail_text=source.thumbnail_text,
-            target_minutes=source.target_minutes,
-            opening_lines=[
-                DialogueLine(line.line_index, line.speaker, line.text)
-                for line in parsed.opening_lines
-            ],
-            chapters=[
-                DialogueChapter(
-                    chapter_index=chapter.chapter_index,
-                    title=chapter.title,
-                    lines=[
-                        DialogueLine(line.line_index, line.speaker, line.text)
-                        for line in chapter.lines
-                    ],
-                )
-                for chapter in parsed.chapters
-            ],
-            closing_lines=[
-                DialogueLine(line.line_index, line.speaker, line.text)
-                for line in parsed.closing_lines
-            ],
-            seo_keywords=source.seo_keywords,
-        )
+        script = _to_dialogue_script(parsed, source)
         script = validate_dialogue_structure(script, source, characters)
         estimated_minutes = estimate_script_minutes(dialogue_text(script))
         minimum_minutes = source.target_minutes * (1 - DEFAULT_DIALOGUE_DURATION_TOLERANCE)
         maximum_minutes = source.target_minutes * (1 + DEFAULT_DIALOGUE_DURATION_TOLERANCE)
         if estimated_minutes > maximum_minutes:
-            raise ValueError("estimated dialogue runtime exceeds the configured maximum")
+            script = self._shorten_overlong_dialogue(
+                script, source=source, characters=characters, maximum_units=maximum_units
+            )
+            estimated_minutes = estimate_script_minutes(dialogue_text(script))
+            if estimated_minutes > maximum_minutes:
+                raise ValueError("estimated dialogue runtime exceeds the configured maximum after one shortening call")
         if estimated_minutes < minimum_minutes:
             script = self._supplement_short_dialogue(
                 script,
@@ -263,6 +261,25 @@ class OpenAIYouTubeDialogueConverter:
                     "after one supplement call"
                 )
         return validate_dialogue_script(script, source, characters)
+
+    def _shorten_overlong_dialogue(
+        self, script: YouTubeDialogueScript, *, source: YouTubeDialogueSource,
+        characters: DialogueCharacters, maximum_units: int,
+    ) -> YouTubeDialogueScript:
+        response = self.client.responses.parse(
+            model=self.model,
+            instructions=(
+                "Rewrite the complete supplied dialogue in concise natural Japanese. Preserve all metadata, "
+                "chapter order, speakers, line indexes, supported facts, numbers, names, and caveats. "
+                f"The total spoken dialogue must not exceed {maximum_units} Japanese non-whitespace characters."
+            ),
+            input=json.dumps({"dialogue": script.__dict__}, ensure_ascii=False, default=lambda value: value.__dict__),
+            text_format=OpenAIYouTubeDialogueResponse,
+        )
+        parsed = _parsed_output(response)
+        if not isinstance(parsed, OpenAIYouTubeDialogueResponse):
+            raise ValueError("OpenAI response did not contain shortened parsed dialogue")
+        return validate_dialogue_structure(_to_dialogue_script(parsed, source), source, characters)
 
     def _supplement_short_dialogue(
         self,
