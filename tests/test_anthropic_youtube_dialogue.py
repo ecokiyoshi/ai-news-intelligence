@@ -29,7 +29,7 @@ from app.youtube_script import (
 from support_anthropic import FakeClient, NoToolCallClient, SequencedMessages, call_input_text
 
 
-def source():
+def source(target_minutes: int = 10):
     idea = YouTubeIdea(
         source_article_ids=[1], title="AI release", hook="A model was released.",
         angle="Explain its technical implications.", target_audience="AI viewers",
@@ -50,7 +50,7 @@ def source():
     script_source = build_youtube_script_source(idea, potential, packaging)
     script = generate_youtube_script(
         script_source, LocalYouTubeOutlineGenerator(), LocalYouTubeScriptGenerator(),
-        channel_focus="AI news", target_minutes=10,
+        channel_focus="AI news", target_minutes=target_minutes,
     )
     return build_youtube_dialogue_source(script)
 
@@ -230,6 +230,19 @@ def test_anthropic_converter_shortens_an_overlong_dialogue_once() -> None:
     assert result.title == "AI Release Explained"
     assert len(messages.calls) == 2
     assert "must not exceed 3500 Japanese" in messages.calls[1]["system"]
+
+
+def test_anthropic_shortening_preserves_ten_minute_target_for_fifteen_minute_source() -> None:
+    parsed = valid_response()
+    parsed.chapters[0].lines[1].text = " ".join(["detail"] * 3000)
+    messages = SequencedMessages([parsed, valid_response()])
+
+    result = AnthropicYouTubeDialogueConverter(
+        client=SimpleNamespace(messages=messages)
+    ).convert(source(15), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS)
+
+    assert result.target_minutes == 10
+    assert len(messages.calls) == 2
 
 
 def test_anthropic_converter_propagates_supplement_provider_exception() -> None:
