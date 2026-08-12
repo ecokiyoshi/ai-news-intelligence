@@ -12,6 +12,8 @@ from app.youtube_dialogue import (
     build_youtube_dialogue_source,
     convert_youtube_script_to_dialogue,
     dialogue_text,
+    japanese_character_ratio,
+    validate_japanese_dialogue,
     validate_dialogue_chapter,
     validate_dialogue_line,
     validate_dialogue_script,
@@ -69,6 +71,20 @@ def all_lines(script):
         *(line for chapter in script.chapters for line in chapter.lines),
         *script.closing_lines,
     ]
+
+
+def japanese_dialogue(script):
+    def translated(line):
+        return replace(line, text="説明" * max(1, len(line.text.split())))
+
+    return replace(
+        script,
+        opening_lines=[translated(line) for line in script.opening_lines],
+        chapters=[replace(
+            chapter, lines=[translated(line) for line in chapter.lines]
+        ) for chapter in script.chapters],
+        closing_lines=[translated(line) for line in script.closing_lines],
+    )
 
 
 def test_default_characters_and_invalid_config() -> None:
@@ -197,6 +213,61 @@ def test_service_rejects_empty_focus_before_converter() -> None:
         def convert(self, *args, **kwargs): raise AssertionError("converter called")
     with pytest.raises(ValueError):
         convert_youtube_script_to_dialogue(source_script(), Never(), channel_focus=" ")
+
+
+def test_japanese_ratio_ignores_numbers_and_punctuation() -> None:
+    assert japanese_character_ratio("これはOpenAI 26GWです。") == pytest.approx(5 / 13)
+    assert japanese_character_ratio("123!? ") == 0
+
+
+def test_japanese_dialogue_validation_rejects_english_spoken_text() -> None:
+    with pytest.raises(ValueError, match="predominantly Japanese"):
+        validate_japanese_dialogue(local_dialogue())
+
+
+def test_service_regenerates_non_japanese_provider_dialogue_once() -> None:
+    english = local_dialogue()
+    japanese = japanese_dialogue(english)
+
+    class SequencedConverter:
+        output_language = "ja"
+
+        def __init__(self):
+            self.results = [english, japanese]
+            self.calls = 0
+
+        def convert(self, *_args, **_kwargs):
+            result = self.results[self.calls]
+            self.calls += 1
+            return result
+
+    converter = SequencedConverter()
+    result = convert_youtube_script_to_dialogue(
+        source_script(), converter, channel_focus="AI news"
+    )
+    assert converter.calls == 2
+    assert japanese_character_ratio(dialogue_text(result)) >= 0.5
+
+
+def test_service_rejects_second_non_japanese_provider_dialogue() -> None:
+    english = local_dialogue()
+
+    class EnglishConverter:
+        output_language = "ja"
+
+        def __init__(self):
+            self.calls = 0
+
+        def convert(self, *_args, **_kwargs):
+            self.calls += 1
+            return english
+
+    converter = EnglishConverter()
+    with pytest.raises(ValueError, match="predominantly Japanese"):
+        convert_youtube_script_to_dialogue(
+            source_script(), converter, channel_focus="AI news"
+        )
+    assert converter.calls == 2
 
 
 def test_custom_character_names_are_supported() -> None:
