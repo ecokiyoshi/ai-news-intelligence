@@ -10,7 +10,7 @@ PRONUNCIATION_MAP = {
     "AMD": "エーエムディー", "AI": "エーアイ", "5G": "ファイブジー", "Wi-Fi": "ワイファイ",
 }
 _TERMS = re.compile("|".join(re.escape(key) for key in sorted(PRONUNCIATION_MAP, key=len, reverse=True)))
-_GW = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s*GW\b", re.I)
+_GW = re.compile(r"(?<![A-Za-z0-9_.])(\d+(?:\.\d+)?)\s*GW(?![A-Za-z])", re.I)
 
 
 def normalize_japanese_tts(text: str) -> str:
