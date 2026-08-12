@@ -54,6 +54,9 @@ Set every empty value required by the selected pipeline, especially:
 - `APP_DOMAIN`: public DNS name, without `https://` or a path.
 - `APP_IMAGE`: GHCR image tag used by both application services. Use an immutable SHA tag in
   production rather than relying only on `latest`.
+- `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD`: credentials protecting every dashboard and API
+  route except `/health`. Generate a long, unique password and leave
+  `DASHBOARD_AUTH_REQUIRED=true` in production.
 - `OPENAI_API_KEY`: required when `SCHEDULER_PROVIDER=openai`; keep it only in `.env` on the VPS.
 - `SCHEDULER_FEED_URLS`: comma-separated HTTP(S) RSS/Atom URLs.
 - `SCHEDULER_RELEVANCE_TARGET`: scoring target used by the news pipeline.

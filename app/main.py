@@ -2,10 +2,12 @@
 
 from fastapi import FastAPI
 
+from app.authentication import DashboardAuthenticationMiddleware
 from app.dashboard import router as dashboard_router
 from app.audio.api import router as audio_router
 
 app = FastAPI(title="AI News Intelligence")
+app.add_middleware(DashboardAuthenticationMiddleware)
 app.include_router(dashboard_router)
 app.include_router(audio_router)
 
