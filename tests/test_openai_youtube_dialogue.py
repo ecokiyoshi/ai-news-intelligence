@@ -158,8 +158,8 @@ def test_openai_converter_uses_typed_responses_and_complete_paired_context() -> 
         "A model was released", '"chapter_index":0', "Why it matters",
         "Explain", "Background", '"estimated_seconds"', '"key_points"',
         '"narration"', '"closing"', '"seo_keywords"',
-        '"whole_script_target":2250', '"whole_script_minimum":1688',
-        '"whole_script_maximum":2812', '"chapter_targets"',
+        '"whole_script_target":4200', '"whole_script_minimum":3150',
+        '"whole_script_maximum":5250', '"chapter_targets"',
     ):
         assert expected in call["input"]
     assert len(client.responses.calls) == 1
@@ -227,7 +227,7 @@ def test_openai_converter_reports_remaining_shortfall_after_one_supplement() -> 
     for chapter in supplement.chapters:
         chapter.lines[0].text = "detail"
     responses = SequencedFakeResponses(initial, supplement)
-    with pytest.raises(ValueError, match=r"remains too short.*remaining English words"):
+    with pytest.raises(ValueError, match=r"remains too short.*remaining Japanese non-whitespace characters"):
         OpenAIYouTubeDialogueConverter(
             client=SimpleNamespace(responses=responses)
         ).convert(source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS)

@@ -25,7 +25,6 @@ from app.youtube_script import (
     ENGLISH_WORDS_PER_MINUTE,
     JAPANESE_CHARACTERS_PER_MINUTE,
     estimate_script_minutes,
-    uses_japanese_duration_heuristic,
 )
 
 YOUTUBE_DIALOGUE_INSTRUCTIONS = """\
@@ -105,10 +104,9 @@ def _duration_units(text: str, japanese: bool) -> int:
 
 
 def _duration_targets(source: YouTubeDialogueSource) -> tuple[bool, int, int, int]:
-    source_text = " ".join(
-        [source.opening_hook, *(section.narration for section in source.narration_sections), source.closing]
-    )
-    japanese = uses_japanese_duration_heuristic(source_text)
+    # This converter always emits Japanese, even when the supplied narration is English.
+    # Duration targets must therefore use Japanese characters rather than source-language words.
+    japanese = True
     rate = JAPANESE_CHARACTERS_PER_MINUTE if japanese else ENGLISH_WORDS_PER_MINUTE
     target = round(source.target_minutes * rate)
     minimum = round(target * (1 - DEFAULT_DIALOGUE_DURATION_TOLERANCE))
