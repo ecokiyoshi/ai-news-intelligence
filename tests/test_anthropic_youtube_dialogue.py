@@ -115,6 +115,7 @@ def test_anthropic_converter_uses_structured_tool_call_and_complete_paired_conte
     assert len(result.chapters) == 8
     call = client.messages.calls[0]
     assert call["model"] == "dialogue-model"
+    assert "every spoken dialogue line in natural Japanese" in call["system"]
     text = call_input_text(call)
     for expected in (
         "AI news", "さび助", "ハル", "primary calm", "audience proxy",

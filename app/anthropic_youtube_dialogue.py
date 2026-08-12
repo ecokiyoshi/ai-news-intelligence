@@ -28,6 +28,9 @@ from app.youtube_script import (
 YOUTUBE_DIALOGUE_INSTRUCTIONS = """\
 Transform the supplied completed YouTube narration into a natural two-character explanatory
 dialogue. This is a transformation task, not a research task. Use only supplied source content.
+Write every spoken dialogue line in natural Japanese, translating supplied English narration while
+preserving its meaning. Keep proper nouns and technical terms when needed, but do not produce
+English sentences. Metadata fields that must match the source may remain in the source language.
 The configured explainer is calm, knowledgeable, concise, gently corrects misunderstandings, and
 carries most factual exposition. The configured learner is the audience proxy: ask short useful
 questions, request clarification, react naturally, and occasionally summarize understanding; do
@@ -86,6 +89,8 @@ def _duration_targets(source: YouTubeDialogueSource) -> tuple[bool, int, int, in
 
 class AnthropicYouTubeDialogueConverter:
     """Convert supplied narration using forced structured Claude tool calls."""
+
+    output_language = "ja"
 
     def __init__(
         self,
@@ -274,6 +279,7 @@ class AnthropicYouTubeDialogueConverter:
             model=self.model,
             system=(
                 "Add only the requested new dialogue lines to the listed deficient chapters. "
+                "Write every added spoken line in natural Japanese. "
                 "Do not repeat or rewrite existing lines. Use only the supplied source facts. "
                 "Start each chapter at its next_line_index and use consecutive indexes. "
                 "Return every requested chapter exactly once and no other chapters."

@@ -4,6 +4,7 @@ Dialogue runtime uses the existing text heuristic and remains approximate only.
 """
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -18,6 +19,13 @@ from app.youtube_script import (
 )
 
 DEFAULT_DIALOGUE_DURATION_TOLERANCE = 0.25
+DEFAULT_JAPANESE_DIALOGUE_RATIO = 0.5
+_JAPANESE_CHARACTERS = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]")
+_LATIN_CHARACTERS = re.compile(r"[A-Za-z]")
+
+
+class JapaneseDialogueLanguageError(ValueError):
+    """Raised when generated spoken dialogue is not predominantly Japanese."""
 
 
 def _required_text(name: str, value: str) -> str:
@@ -151,6 +159,8 @@ class YouTubeDialogueScript:
 
 
 class YouTubeDialogueConverter(Protocol):
+    output_language: str
+
     def convert(
         self,
         source: YouTubeDialogueSource,
@@ -254,6 +264,32 @@ def dialogue_text(script: YouTubeDialogueScript) -> str:
             *(line.text for line in script.closing_lines),
         ]
     )
+
+
+def japanese_character_ratio(text: str) -> float:
+    """Return the Japanese share of Japanese and Latin letters in spoken text."""
+
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+    japanese = len(_JAPANESE_CHARACTERS.findall(text))
+    latin = len(_LATIN_CHARACTERS.findall(text))
+    total = japanese + latin
+    return japanese / total if total else 0.0
+
+
+def validate_japanese_dialogue(
+    script: YouTubeDialogueScript,
+    minimum_ratio: float = DEFAULT_JAPANESE_DIALOGUE_RATIO,
+) -> YouTubeDialogueScript:
+    """Reject dialogue whose spoken lines are not predominantly Japanese."""
+
+    ratio = japanese_character_ratio(dialogue_text(script))
+    if ratio < minimum_ratio:
+        raise JapaneseDialogueLanguageError(
+            "dialogue spoken text must be predominantly Japanese; "
+            f"Japanese character ratio {ratio:.1%} is below {minimum_ratio:.1%}"
+        )
+    return script
 
 
 def validate_dialogue_script(
@@ -421,4 +457,10 @@ def convert_youtube_script_to_dialogue(
     characters = validate_dialogue_characters(characters)
     tolerance = _ratio("duration_tolerance_ratio", duration_tolerance_ratio)
     result = converter.convert(source, channel_focus=focus, characters=characters)
+    if getattr(converter, "output_language", None) == "ja":
+        try:
+            validate_japanese_dialogue(result)
+        except JapaneseDialogueLanguageError:
+            result = converter.convert(source, channel_focus=focus, characters=characters)
+            validate_japanese_dialogue(result)
     return validate_dialogue_script(result, source, characters, tolerance)

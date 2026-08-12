@@ -150,6 +150,7 @@ def test_openai_converter_uses_typed_responses_and_complete_paired_context() -> 
     assert len(result.chapters) == 8
     call = client.responses.calls[0]
     assert call["model"] == "dialogue-model"
+    assert "every spoken dialogue line in natural Japanese" in call["instructions"]
     assert call["text_format"] is OpenAIYouTubeDialogueResponse
     for expected in (
         "AI news", "さび助", "ハル", "primary calm", "audience proxy",
