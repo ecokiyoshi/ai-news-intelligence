@@ -210,6 +210,20 @@ Open <http://localhost:8000/dashboard>. The read-only JSON endpoints are
 `GET /api/runs` for newest-first run summaries and `GET /api/runs/{run_id}` for complete run
 metadata.
 
+To protect the dashboard, its JSON APIs, images, audio, and API documentation with browser-native
+HTTP Basic authentication, set all three values below. `/health` intentionally remains public for
+container and uptime checks. Production Compose enables `DASHBOARD_AUTH_REQUIRED` by default and
+returns `503` until both credentials are supplied.
+
+```dotenv
+DASHBOARD_AUTH_REQUIRED=true
+DASHBOARD_USERNAME=admin
+DASHBOARD_PASSWORD=use-a-long-unique-password
+```
+
+Credentials are protected in transit by HTTPS in the production Caddy configuration. Do not use
+Basic authentication over plain HTTP outside local development.
+
 For local development, select any output directory and start the existing FastAPI application:
 
 ```bash

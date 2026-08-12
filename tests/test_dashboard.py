@@ -9,6 +9,29 @@ from app.main import app
 client = TestClient(app)
 
 
+def test_dashboard_authentication_protects_html_and_api(monkeypatch) -> None:
+    monkeypatch.setenv("DASHBOARD_AUTH_REQUIRED", "true")
+    monkeypatch.setenv("DASHBOARD_USERNAME", "editor")
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "a-long-test-password")
+
+    for path in ("/dashboard", "/api/runs", "/docs"):
+        response = client.get(path)
+        assert response.status_code == 401
+        assert response.headers["www-authenticate"].startswith("Basic ")
+
+    assert client.get("/dashboard", auth=("editor", "wrong")).status_code == 401
+    assert client.get("/dashboard", auth=("editor", "a-long-test-password")).status_code == 200
+    assert client.get("/health").status_code == 200
+
+
+def test_required_authentication_rejects_incomplete_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("DASHBOARD_AUTH_REQUIRED", "true")
+    monkeypatch.setenv("DASHBOARD_USERNAME", "editor")
+    monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
+
+    assert client.get("/dashboard").status_code == 503
+
+
 def sample_run(run_id: str, created_at: str = "2026-08-09T12:00:00+00:00") -> dict:
     return {
         "run_id": run_id,
