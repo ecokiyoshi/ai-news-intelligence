@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.anthropic_youtube_dialogue import (
+    YOUTUBE_DIALOGUE_INSTRUCTIONS,
     AnthropicDialogueChapter,
     AnthropicDialogueChapterSupplement,
     AnthropicDialogueLine,
@@ -49,7 +50,7 @@ def source():
     script_source = build_youtube_script_source(idea, potential, packaging)
     script = generate_youtube_script(
         script_source, LocalYouTubeOutlineGenerator(), LocalYouTubeScriptGenerator(),
-        channel_focus="AI news", target_minutes=15,
+        channel_focus="AI news", target_minutes=10,
     )
     return build_youtube_dialogue_source(script)
 
@@ -96,7 +97,7 @@ def sufficient_supplement(parsed: AnthropicYouTubeDialogueResponse | None = None
         AnthropicDialogueChapterSupplement(
             chapter_index=chapter.chapter_index,
             lines=[AnthropicDialogueLine(
-                line_index=len(chapter.lines), speaker="さび助", text=" ".join(["detail"] * 280),
+                line_index=len(chapter.lines), speaker="さび助", text=" ".join(["detail"] * 180),
             )],
         )
         for chapter in parsed.chapters
@@ -119,15 +120,25 @@ def test_anthropic_converter_uses_structured_tool_call_and_complete_paired_conte
     text = call_input_text(call)
     for expected in (
         "AI news", "さび助", "ハル", "primary calm", "audience proxy",
-        "AI Release Explained", "WHAT CHANGED", '"target_minutes":15',
+        "AI Release Explained", "WHAT CHANGED", '"japanese_target_minutes":10',
         "A model was released", '"chapter_index":0', "Why it matters",
         "Explain", "Background", '"estimated_seconds"', '"key_points"',
         '"narration"', '"closing"', '"seo_keywords"',
-        '"whole_script_target":4200', '"whole_script_minimum":3150',
-        '"whole_script_maximum":5250', '"chapter_targets"',
+        '"whole_script_target":2800', '"whole_script_minimum":2100',
+        '"whole_script_maximum":3500',
     ):
         assert expected in text
     assert len(client.messages.calls) == 1
+
+
+def test_anthropic_prompt_allows_chapter_reorganization_and_casual_dialogue() -> None:
+    instructions = YOUTUBE_DIALOGUE_INSTRUCTIONS
+    assert "Do not preserve the source chapter count" in instructions
+    assert "9, 10, 15, 20" in instructions
+    assert "Do not map chapters one-to-one" in instructions
+    assert "Do not use formal Japanese" in instructions
+    assert "close friends" in instructions
+    assert "Haru asks short casual" in instructions
 
 
 def test_anthropic_converter_supplements_only_short_chapters_and_preserves_existing() -> None:
@@ -218,7 +229,7 @@ def test_anthropic_converter_shortens_an_overlong_dialogue_once() -> None:
     ).convert(source(), channel_focus="AI", characters=DEFAULT_DIALOGUE_CHARACTERS)
     assert result.title == "AI Release Explained"
     assert len(messages.calls) == 2
-    assert "must not exceed 5250 Japanese" in messages.calls[1]["system"]
+    assert "must not exceed 3500 Japanese" in messages.calls[1]["system"]
 
 
 def test_anthropic_converter_propagates_supplement_provider_exception() -> None:

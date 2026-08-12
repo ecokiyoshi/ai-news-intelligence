@@ -19,9 +19,16 @@ from app.youtube_script import (
 )
 
 DEFAULT_DIALOGUE_DURATION_TOLERANCE = 0.25
+MIN_JAPANESE_DIALOGUE_MINUTES = 7
+MAX_JAPANESE_DIALOGUE_MINUTES = 10
 DEFAULT_JAPANESE_DIALOGUE_RATIO = 0.5
 _JAPANESE_CHARACTERS = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]")
 _LATIN_CHARACTERS = re.compile(r"[A-Za-z]")
+
+
+def japanese_dialogue_target_minutes(source_minutes: int) -> int:
+    """Choose the viewer-friendly runtime for the rewritten Japanese edition."""
+    return min(MAX_JAPANESE_DIALOGUE_MINUTES, max(MIN_JAPANESE_DIALOGUE_MINUTES, source_minutes))
 
 
 class JapaneseDialogueLanguageError(ValueError):
@@ -301,7 +308,7 @@ def validate_dialogue_script(
     validated = validate_dialogue_structure(script, source, characters)
     tolerance = _ratio("duration_tolerance_ratio", duration_tolerance_ratio)
     estimated_minutes = estimate_script_minutes(dialogue_text(validated))
-    if not math.isclose(estimated_minutes, source.target_minutes, rel_tol=tolerance):
+    if not math.isclose(estimated_minutes, validated.target_minutes, rel_tol=tolerance):
         raise ValueError("estimated dialogue runtime is outside the configured tolerance")
     return validated
 
@@ -320,19 +327,19 @@ def validate_dialogue_structure(
     script = YouTubeDialogueScript(**script.__dict__)
     if script.title != source.title or script.thumbnail_text != source.thumbnail_text:
         raise ValueError("dialogue must preserve selected title and thumbnail text")
-    if script.target_minutes != source.target_minutes:
-        raise ValueError("dialogue must preserve target_minutes")
+    allowed_targets = {
+        source.target_minutes,
+        japanese_dialogue_target_minutes(source.target_minutes),
+    }
+    if script.target_minutes not in allowed_targets:
+        raise ValueError("dialogue target_minutes must match the source or Japanese 7-10 minute target")
     if script.seo_keywords != source.seo_keywords:
         raise ValueError("dialogue must preserve seo_keywords")
     opening = _validate_lines("opening_lines", script.opening_lines, characters)
     closing = _validate_lines("closing_lines", script.closing_lines, characters)
     chapters = [validate_dialogue_chapter(chapter, characters) for chapter in script.chapters]
-    source_indexes = [chapter.chapter_index for chapter in source.chapters]
-    if [chapter.chapter_index for chapter in chapters] != source_indexes:
-        raise ValueError("dialogue chapters must preserve exact source order and coverage")
-    for dialogue_chapter, source_chapter in zip(chapters, source.chapters, strict=True):
-        if dialogue_chapter.title != source_chapter.title:
-            raise ValueError("dialogue chapter title must match the source chapter")
+    if [chapter.chapter_index for chapter in chapters] != list(range(len(chapters))):
+        raise ValueError("dialogue chapter indexes must be sequential from zero")
     speakers = {
         line.speaker
         for line in [
@@ -450,7 +457,7 @@ def convert_youtube_script_to_dialogue(
     characters: DialogueCharacters = DEFAULT_DIALOGUE_CHARACTERS,
     duration_tolerance_ratio: float = DEFAULT_DIALOGUE_DURATION_TOLERANCE,
 ) -> YouTubeDialogueScript:
-    """Convert a complete script while preserving chapters and approximate duration."""
+    """Rewrite a complete source script into a reorganized 7-10 minute dialogue."""
 
     source = build_youtube_dialogue_source(source_script)
     focus = _required_text("channel_focus", channel_focus)
