@@ -1,0 +1,120 @@
+name: Configure production editorial review
+
+on:
+  workflow_dispatch:
+    inputs:
+      enabled:
+        description: Require human editorial review before visual generation
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  configure:
+    name: Configure editorial review on VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_PORT: ${{ secrets.VPS_PORT }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+      DEPLOY_DIR: /opt/ai-news-intelligence
+      EDITORIAL_REVIEW_REQUIRED: ${{ inputs.enabled }}
+
+    steps:
+      - name: Configure verified SSH connection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          required=(VPS_HOST VPS_USER VPS_PORT VPS_SSH_KEY VPS_KNOWN_HOSTS)
+          for variable in "${required[@]}"; do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "::error::Required production secret is missing: ${variable}"
+              exit 1
+            fi
+          done
+          [[ "${VPS_HOST}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$ ]]
+          [[ "${VPS_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "${VPS_USER}" != "root" ]]
+          [[ "${VPS_PORT}" =~ ^[0-9]{1,5}$ ]]
+          ((10#${VPS_PORT} >= 1 && 10#${VPS_PORT} <= 65535))
+          [[ "${EDITORIAL_REVIEW_REQUIRED}" =~ ^(true|false)$ ]]
+
+          umask 077
+          install -d "${HOME}/.ssh"
+          printf '%s\n' "${VPS_SSH_KEY}" >"${HOME}/.ssh/editorial_config_key"
+          printf '%s\n' "${VPS_KNOWN_HOSTS}" >"${HOME}/.ssh/known_hosts"
+
+      - name: Update flag, restart services, and verify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh_options=(
+            -i "${HOME}/.ssh/editorial_config_key"
+            -p "${VPS_PORT}"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+          )
+          target="${VPS_USER}@${VPS_HOST}"
+          ssh "${ssh_options[@]}" "${target}" bash -se --             "${DEPLOY_DIR}" "${EDITORIAL_REVIEW_REQUIRED}" <<'REMOTE'
+          set -Eeuo pipefail
+          deploy_dir="$1"
+          enabled="$2"
+          [[ "$enabled" =~ ^(true|false)$ ]]
+          cd "$deploy_dir"
+          exec 9>"$deploy_dir/.operations.lock"
+          flock --nonblock 9 || {
+            echo 'Another production operation is already active.' >&2
+            exit 1
+          }
+
+          python3 - "$enabled" <<'PY'
+          import os
+          from pathlib import Path
+          import sys
+          enabled = sys.argv[1]
+          path = Path(".env")
+          lines = path.read_text(encoding="utf-8").splitlines()
+          key = "EDITORIAL_REVIEW_REQUIRED"
+          replacement = f"{key}={enabled}"
+          updated = []
+          found = False
+          for line in lines:
+              if line.startswith(f"{key}="):
+                  if not found:
+                      updated.append(replacement)
+                      found = True
+              else:
+                  updated.append(line)
+          if not found:
+              updated.append(replacement)
+          temporary = path.with_name(".env.editorial.tmp")
+          temporary.write_text("\n".join(updated) + "\n", encoding="utf-8")
+          os.chmod(temporary, 0o600)
+          temporary.replace(path)
+          PY
+
+          compose=(docker compose --env-file .env -f compose.production.yaml)
+          "${compose[@]}" config --quiet
+          "${compose[@]}" up -d --no-build --force-recreate scheduler dashboard
+          actual=$("${compose[@]}" exec -T scheduler sh -c 'printf %s "$EDITORIAL_REVIEW_REQUIRED"')
+          [[ "$actual" == "$enabled" ]]
+          ./scripts/healthcheck.sh
+          echo "EDITORIAL_REVIEW_REQUIRED applied successfully."
+          REMOTE
+
+      - name: Remove SSH private key
+        if: always()
+        shell: bash
+        run: rm -f -- "${HOME}/.ssh/editorial_config_key"
