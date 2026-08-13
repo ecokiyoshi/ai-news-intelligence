@@ -184,6 +184,7 @@ Required and bounded settings are documented in `.env.example`:
 
 ```dotenv
 PIPELINE_MODE=end_to_end
+EDITORIAL_REVIEW_REQUIRED=false
 PIPELINE_NEWS_LIMIT=10
 YOUTUBE_CHANNEL_FOCUS=AI industry explanations
 YOUTUBE_IDEA_COUNT=3
@@ -192,6 +193,11 @@ YOUTUBE_TARGET_MINUTES=15
 YOUTUBE_SCENE_LIMIT=50
 YOUTUBE_IMAGE_SIZE=1792x1024
 ```
+
+Set `EDITORIAL_REVIEW_REQUIRED=true` to stop an end-to-end run after the idea, script, and
+dialogue have been generated. The run is persisted with editorial status `in_review` and no visual
+plan or scene images. The default is `false`, so existing scheduled deployments retain the complete
+automatic flow. Older runs without editorial metadata are treated as `completed`.
 
 `PIPELINE_NEWS_LIMIT` is a hard per-run provider-call guard as well as the final priority-news
 selection limit. At most that many articles are sent through summarization and scoring in one run;
@@ -277,8 +283,8 @@ The health endpoint is available at <http://127.0.0.1:8000/health> and returns:
 
 ## Web dashboard
 
-The read-only dashboard displays completed YouTube production runs without changing or regenerating
-their artifacts. Docker Compose starts it alongside the scheduler and mounts generated outputs
+The read-only dashboard displays completed runs and editorial-review drafts without changing or
+regenerating their artifacts. Docker Compose starts it alongside the scheduler and mounts generated outputs
 read-only:
 
 ```bash

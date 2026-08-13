@@ -44,6 +44,7 @@ def test_runtime_config_derives_database_url_and_parses_values(tmp_path: Path) -
     assert config.provider == "local"
     assert config.timezone == "Asia/Tokyo"
     assert config.pipeline_mode == "news"
+    assert config.require_editorial_review is False
     assert config.news_limit == 10
     assert config.idea_count == 3
     assert config.packaging_count == 5
@@ -58,6 +59,13 @@ def test_explicit_database_url_takes_precedence(tmp_path: Path) -> None:
     assert config.database_url == expected
 
 
+def test_editorial_review_can_be_enabled(tmp_path: Path) -> None:
+    config = RuntimeConfig.from_env(
+        environment(tmp_path, EDITORIAL_REVIEW_REQUIRED="true")
+    )
+    assert config.require_editorial_review is True
+
+
 @pytest.mark.parametrize(
     ("name", "value", "message"),
     [
@@ -70,6 +78,7 @@ def test_explicit_database_url_takes_precedence(tmp_path: Path) -> None:
         ("SCHEDULER_PROVIDER", "unknown", "must be 'local', 'openai', or 'anthropic'"),
         ("TZ", "Not/A-Timezone", "unknown TZ"),
         ("PIPELINE_MODE", "unknown", "PIPELINE_MODE"),
+        ("EDITORIAL_REVIEW_REQUIRED", "yes", "EDITORIAL_REVIEW_REQUIRED"),
         ("PIPELINE_NEWS_LIMIT", "0", "positive integer"),
         ("YOUTUBE_IDEA_COUNT", "11", "must not exceed"),
         ("YOUTUBE_PACKAGING_COUNT", "11", "must not exceed"),
