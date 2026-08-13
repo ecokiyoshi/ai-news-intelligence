@@ -283,17 +283,21 @@ The health endpoint is available at <http://127.0.0.1:8000/health> and returns:
 
 ## Web dashboard
 
-The read-only dashboard displays completed runs and editorial-review drafts without changing or
-regenerating their artifacts. Docker Compose starts it alongside the scheduler and mounts generated outputs
-read-only:
+The dashboard displays completed runs and editorial-review drafts. For `in_review` runs it provides
+JSON editors for the selected idea, script, and dialogue. Saves are validated, revisioned, and
+protected against stale updates. After explicit approval, the project detail page can continue visual
+planning and scene-image generation once; dialogue audio remains a separate optional action after
+completion. Docker Compose starts the dashboard alongside the scheduler and gives it access to the
+shared generated-output volume:
 
 ```bash
 docker compose up -d --build
 ```
 
-Open <http://localhost:8000/dashboard>. The read-only JSON endpoints are
-`GET /api/runs` for newest-first run summaries and `GET /api/runs/{run_id}` for complete run
-metadata.
+Open <http://localhost:8000/dashboard>. Read endpoints are `GET /api/runs` and
+`GET /api/runs/{run_id}`. Editorial mutations use `PUT /api/runs/{run_id}/editorial`,
+`POST /api/runs/{run_id}/approve`, and `POST /api/runs/{run_id}/continue`. Existing dashboard
+authentication protects these routes as well as the HTML pages.
 
 To protect the dashboard, its JSON APIs, images, audio, and API documentation with browser-native
 HTTP Basic authentication, set all three values below. `/health` intentionally remains public for

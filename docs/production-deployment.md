@@ -16,7 +16,7 @@ scheduler ── outbound-only application network ── RSS/OpenAI
   └── generated_outputs:/data/outputs
 
 dashboard
-  └── generated_outputs:/data/outputs:ro
+  └── generated_outputs:/data/outputs
 ```
 
 Only Caddy publishes host ports. The dashboard is reachable only from Caddy on the internal
@@ -32,7 +32,8 @@ can duplicate paid OpenAI text and image generation.
 - `scheduler` runs `python -m app.runtime run`, handles SIGTERM/SIGINT, and uses the existing local
   database/writability health check. The check never contacts RSS or OpenAI.
 - `dashboard` runs the existing FastAPI application on container port 8000. Its `/health` endpoint
-  performs no paid work, and its generated output mount is read-only.
+  performs no paid work. The generated output mount is writable so authenticated editors can save
+  revisions, approve drafts, and continue scene-image generation.
 - `caddy` terminates HTTPS and proxies requests to `dashboard:8000`.
 - `app_data` stores SQLite and scheduler state.
 - `generated_outputs` stores images, `manifest.json`, and `run.json`.
