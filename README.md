@@ -1,5 +1,20 @@
 # AI News Intelligence
 
+## Run the full test suite on Windows
+
+Git for Windows includes the Bash runtime needed by the deployment and operations tests. From
+PowerShell, run:
+
+```powershell
+.\scripts\test-windows.ps1 -Python C:\path\to\python.exe
+```
+
+The selected Python must have the project development dependencies installed (for example,
+`python -m pip install -e ".[dev]"`). The runner locates Git Bash under the standard Git for Windows
+installation path, exports `AI_NEWS_BASH`, and runs the same pytest suite used on Linux. Override a
+non-standard Bash installation with `AI_NEWS_BASH=C:\path\to\bash.exe`. No WSL, Docker Desktop, or
+administrator privileges are required for these offline tests.
+
 ## Adobe Premiere Pro UXP timeline builder (Phase 1)
 
 Completed production artifacts can be converted into a provider-neutral
