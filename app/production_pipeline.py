@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 0.5 seconds
-Output:
 """Provider-independent orchestration from RSS collection through scene images."""
 
 from __future__ import annotations
