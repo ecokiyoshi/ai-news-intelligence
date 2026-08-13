@@ -1,6 +1,8 @@
 const { localFileSystem, fileTypes } = require("uxp").storage;
 let loaded = null;
 let entry = null;
+let rebuildArmed = false;
+let rebuildTimer = null;
 const status = document.querySelector("#status");
 const buttons = { validate: document.querySelector("#validate"), build: document.querySelector("#build"), rebuild: document.querySelector("#rebuild") };
 
@@ -28,11 +30,27 @@ buttons.validate.addEventListener("click", async () => { try { await validate();
 async function build(rebuild) {
   try {
     await validate();
-    if (rebuild && !confirm(`Delete and rebuild only the generated sequence “${loaded.sequence.name}”?`)) return;
     report("Building timeline…");
     const result = await PremiereTimelineBuilder.buildTimeline(loaded, directoryOf(entry.nativePath), { rebuild });
     report(`Built ${result.sequence.name}.\n${result.overlayCount} overlay entries remain available as plan sidecar metadata.`, "ok");
   } catch (error) { report(error.message, "error"); }
 }
 buttons.build.addEventListener("click", () => build(false));
-buttons.rebuild.addEventListener("click", () => build(true));
+buttons.rebuild.addEventListener("click", () => {
+  if (!rebuildArmed) {
+    rebuildArmed = true;
+    buttons.rebuild.textContent = "Confirm rebuild generated timeline";
+    report(`Click Confirm within 10 seconds to delete and rebuild only “${loaded.sequence.name}”.`);
+    clearTimeout(rebuildTimer);
+    rebuildTimer = setTimeout(() => {
+      rebuildArmed = false;
+      buttons.rebuild.textContent = "Rebuild generated timeline";
+      report("Rebuild confirmation expired.");
+    }, 10000);
+    return;
+  }
+  clearTimeout(rebuildTimer);
+  rebuildArmed = false;
+  buttons.rebuild.textContent = "Rebuild generated timeline";
+  build(true);
+});
