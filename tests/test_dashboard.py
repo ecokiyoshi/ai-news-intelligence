@@ -65,6 +65,33 @@ def write_run(root: Path, data: dict) -> Path:
     return run_dir
 
 
+def review_run(run_id: str) -> dict:
+    data = sample_run(run_id)
+    data["selected_youtube_idea"].update(
+        {
+            "source_article_ids": [1], "angle": "angle", "target_audience": "viewers",
+            "estimated_length_minutes": 10, "thumbnail_text": "AI", "chapters": ["chapter"],
+            "seo_keywords": ["AI"],
+        }
+    )
+    data["script"].update(
+        {"title": "AI", "thumbnail_text": "AI", "target_minutes": 10,
+         "seo_keywords": ["AI"], "chapters": [{"chapter_index": 0, "title": "chapter",
+         "objective": "explain", "estimated_seconds": 300, "key_points": ["fact"]}]}
+    )
+    data["dialogue"].update(
+        {"title": "AI", "thumbnail_text": "AI", "target_minutes": 10,
+         "seo_keywords": ["AI"], "closing_lines": [{"line_index": 0, "speaker": "ハル", "text": "完了"}]}
+    )
+    data.update(
+        {"editorial": {"schema": "ai-news-intelligence/editorial-workflow", "schema_version": 1,
+         "status": "in_review", "revision": 1, "generated_at": "2026-08-14T00:00:00Z",
+         "updated_at": "2026-08-14T00:00:00Z", "approved_at": None},
+         "visual_plan": None, "generated_images": [], "output_files": ["run.json"]}
+    )
+    return data
+
+
 def test_empty_dashboard(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "missing"))
     response = client.get("/dashboard")
@@ -93,6 +120,35 @@ def test_run_api_detail_and_missing(monkeypatch, tmp_path: Path) -> None:
     write_run(tmp_path, sample_run("run-one"))
     assert client.get("/api/runs/run-one").json()["channel_focus"] == "日本のAIニュース"
     assert client.get("/api/runs/not-found").status_code == 404
+
+
+def test_editorial_edit_save_conflict_and_approval(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    data = review_run("review-one")
+    write_run(tmp_path, data)
+
+    edit = client.get("/dashboard/runs/review-one/edit")
+    assert edit.status_code == 200
+    assert "企画・台本・対話" in edit.text
+    content = {key: data[key] for key in ("selected_youtube_idea", "script", "dialogue")}
+    content["selected_youtube_idea"]["title"] = "Edited title"
+    saved = client.put(
+        "/api/runs/review-one/editorial",
+        json={"expected_revision": 1, "content": content},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["editorial"]["revision"] == 2
+    assert client.put(
+        "/api/runs/review-one/editorial",
+        json={"expected_revision": 1, "content": content},
+    ).status_code == 409
+
+    approved = client.post(
+        "/api/runs/review-one/approve", json={"expected_revision": 2}
+    )
+    assert approved.status_code == 200
+    assert approved.json()["editorial"]["status"] == "approved"
+    assert client.get("/dashboard/runs/review-one/edit").status_code == 409
 
 
 def test_dashboard_detail_contains_complete_content(monkeypatch, tmp_path: Path) -> None:
