@@ -250,6 +250,57 @@ def prepare_runtime(config: RuntimeConfig) -> None:
         engine.dispose()
 
 
+def build_production_providers(config: RuntimeConfig) -> ProductionProviders:
+    """Build providers shared by scheduled and dashboard continuation flows."""
+
+    if config.provider == "openai":
+        client = OpenAI()
+        return ProductionProviders(
+            summarizer=OpenAISummarizer(client=client),
+            news_scorer=OpenAIScorer(client=client),
+            text_provider=MetadataTextProvider(),
+            idea_generator=OpenAIYouTubeIdeaGenerator(client=client),
+            potential_scorer=OpenAIYouTubePotentialScorer(client=client),
+            packaging_generator=OpenAIYouTubePackagingGenerator(client=client),
+            packaging_evaluator=OpenAIYouTubePackagingEvaluator(client=client),
+            outline_generator=OpenAIYouTubeOutlineGenerator(client=client),
+            script_generator=OpenAIYouTubeScriptGenerator(client=client),
+            dialogue_converter=OpenAIYouTubeDialogueConverter(client=client),
+            visual_planner=OpenAIYouTubeVisualPlanner(client=client),
+            image_generator=OpenAISceneImageGenerator(client=client),
+        )
+    if config.provider == "anthropic":
+        client = Anthropic()
+        return ProductionProviders(
+            summarizer=AnthropicSummarizer(client=client),
+            news_scorer=AnthropicScorer(client=client),
+            text_provider=MetadataTextProvider(),
+            idea_generator=AnthropicYouTubeIdeaGenerator(client=client),
+            potential_scorer=AnthropicYouTubePotentialScorer(client=client),
+            packaging_generator=AnthropicYouTubePackagingGenerator(client=client),
+            packaging_evaluator=AnthropicYouTubePackagingEvaluator(client=client),
+            outline_generator=AnthropicYouTubeOutlineGenerator(client=client),
+            script_generator=AnthropicYouTubeScriptGenerator(client=client),
+            dialogue_converter=AnthropicYouTubeDialogueConverter(client=client),
+            visual_planner=AnthropicYouTubeVisualPlanner(client=client),
+            image_generator=LocalSceneImageGenerator(),
+        )
+    return ProductionProviders(
+        summarizer=LocalSummarizer(),
+        news_scorer=LocalScorer(),
+        text_provider=MetadataTextProvider(),
+        idea_generator=LocalYouTubeIdeaGenerator(),
+        potential_scorer=LocalYouTubePotentialScorer(),
+        packaging_generator=LocalYouTubePackagingGenerator(),
+        packaging_evaluator=LocalYouTubePackagingEvaluator(),
+        outline_generator=LocalYouTubeOutlineGenerator(),
+        script_generator=LocalYouTubeScriptGenerator(),
+        dialogue_converter=LocalYouTubeDialogueConverter(),
+        visual_planner=LocalYouTubeVisualPlanner(),
+        image_generator=LocalSceneImageGenerator(),
+    )
+
+
 def build_runtime_runner(config: RuntimeConfig) -> Callable[[], object]:
     """Build the configured one-run callable shared by scheduled and one-shot execution."""
 
