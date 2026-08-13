@@ -59,6 +59,7 @@ from app.openai_youtube_script import (
 from app.openai_youtube_visuals import OpenAIYouTubeVisualPlanner
 from app.pipeline import MetadataTextProvider
 from app.production_pipeline import (
+    EditorialReviewResult,
     ProductionPipelineResult,
     ProductionProviders,
     run_production_pipeline,
@@ -99,6 +100,7 @@ class RuntimeConfig:
     interval_seconds: float
     provider: str
     pipeline_mode: str
+    require_editorial_review: bool
     news_limit: int
     channel_focus: str
     idea_count: int
@@ -161,6 +163,10 @@ class RuntimeConfig:
         pipeline_mode = values.get("PIPELINE_MODE", "news").strip().lower()
         if pipeline_mode not in {"news", "end_to_end"}:
             raise ValueError("PIPELINE_MODE must be 'news' or 'end_to_end'")
+        editorial_review = values.get("EDITORIAL_REVIEW_REQUIRED", "false").strip().lower()
+        if editorial_review not in {"true", "false"}:
+            raise ValueError("EDITORIAL_REVIEW_REQUIRED must be 'true' or 'false'")
+        require_editorial_review = editorial_review == "true"
 
         def positive_integer(name: str, default: str) -> int:
             raw = values.get(name, default)
@@ -209,6 +215,7 @@ class RuntimeConfig:
             interval_seconds=interval_seconds,
             provider=provider,
             pipeline_mode=pipeline_mode,
+            require_editorial_review=require_editorial_review,
             news_limit=news_limit,
             channel_focus=channel_focus,
             idea_count=idea_count,
@@ -308,7 +315,7 @@ def build_runtime_runner(config: RuntimeConfig) -> Callable[[], object]:
             limit=config.news_limit,
         )
 
-    def production_runner() -> ProductionPipelineResult:
+    def production_runner() -> ProductionPipelineResult | EditorialReviewResult:
         with sessions() as session:
             return run_production_pipeline(
                 config.feed_urls,
@@ -323,6 +330,7 @@ def build_runtime_runner(config: RuntimeConfig) -> Callable[[], object]:
                 target_minutes=config.target_minutes,
                 scene_limit=config.scene_limit,
                 image_size=config.image_size,
+                require_editorial_review=config.require_editorial_review,
             )
 
     return production_runner
