@@ -1,5 +1,84 @@
 # AI News Intelligence
 
+## Run the full test suite on Windows
+
+Git for Windows includes the Bash runtime needed by the deployment and operations tests. From
+PowerShell, run:
+
+```powershell
+.\scripts\test-windows.ps1 -Python C:\path\to\python.exe
+```
+
+The selected Python must have the project development dependencies installed (for example,
+`python -m pip install -e ".[dev]"`). The runner locates Git Bash under the standard Git for Windows
+installation path, exports `AI_NEWS_BASH`, and runs the same pytest suite used on Linux. Override a
+non-standard Bash installation with `AI_NEWS_BASH=C:\path\to\bash.exe`. No WSL, Docker Desktop, or
+administrator privileges are required for these offline tests.
+
+## Adobe Premiere Pro UXP timeline builder (Phase 1)
+
+Completed production artifacts can be converted into a provider-neutral
+`premiere-edit-plan.json`, then loaded by the UXP plugin in `premiere-uxp/`:
+
+```text
+run.json + manifest.json + scene images + audio/manifest.json + dialogue MP3s
+→ premiere-edit-plan.json
+→ Premiere Pro UXP panel
+→ editable 16:9 sequence
+```
+
+Generate and validate a plan without contacting Adobe, OpenAI, or ElevenLabs:
+
+```bash
+python -m app.premiere_edit_plan generated-outputs/RUN_ID --require-audio
+```
+
+Omit `--require-audio` when dialogue audio has not been generated yet. The plan then records
+deterministic text-based duration estimates and `null` audio assets. When an audio manifest supplies
+`duration_seconds`/`duration_ms`, that timing is preferred; otherwise the builder probes local media
+with `ffprobe` when available and falls back to an estimate. Re-run the command after generating
+audio to obtain actual-media timing.
+
+The plan uses paths relative to its run directory, rejects traversal/out-of-run paths, maps scene
+images in source order, maps さび助 and ハル to distinct logical audio roles, and includes only the
+metadata required for editing. Provider configuration and environment values are never copied.
+
+### Load the UXP plugin
+
+Phase 1 requires Adobe Premiere Pro 25.6 or newer, UXP Developer Tool 2.2 or newer, and Manifest v5.
+In UXP Developer Tool, choose **Add Plugin**, select `premiere-uxp/manifest.json`, start Premiere,
+then load the plugin and open **AI News Timeline Builder**. The manifest requests user-selected local
+filesystem access only; it does not request network access or unrestricted filesystem access.
+
+1. Open the target Premiere project.
+2. Select `premiere-edit-plan.json` in the panel.
+3. Validate, then choose **Build timeline**.
+4. If the deterministic generated sequence already exists, the normal build refuses to duplicate it.
+   Use **Rebuild generated timeline** and confirm to delete/recreate only that named sequence.
+
+The logical layout is `video.scene`, `dialogue.sabisuke`, `dialogue.haru`, and
+`captions.overlay`. Additional BGM, SFX, transition, and motion-graphics roles are reserved for later
+schema-compatible phases. Imported media is reused when Premiere finds an existing project item for
+the same path.
+
+### Known Phase 1 limitations and troubleshooting
+
+- Premiere Pro UXP 25.6 documents sequence, import, and timeline insertion APIs, but no supported
+  caption-creation mutation API. Subtitle and overlay entries therefore remain in the validated plan
+  as safe sidecar metadata; the plugin reports their count and does not claim to create captions.
+- BGM, transitions, MOGRT automation, export/render, and YouTube upload are intentionally out of scope.
+- A missing-media error means an asset was moved after plan generation; restore it under the run
+  directory or regenerate the plan. Absolute paths and `..` traversal are deliberately rejected.
+- An unsupported schema/version error means the plugin and plan generator must be updated together.
+- Automated tests cover plan generation and static UXP logic only. A real Premiere execution test
+  requires Premiere Pro and must be reported separately.
+
+Adobe references used for this implementation: [Premiere UXP APIs](https://developer.adobe.com/premiere-pro/uxp/ppro-reference/),
+[Project import/sequence APIs](https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/project/),
+[SequenceEditor](https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/sequenceeditor/),
+[UXP filesystem permissions](https://developer.adobe.com/premiere-pro/uxp/resources/recipes/filesystem-operations/),
+and [Manifest v5](https://developer.adobe.com/premiere-pro/uxp/plugins/concepts/manifest/).
+
 ## ElevenLabs Japanese dialogue audio
 
 Completed `run.json` dialogue can be synthesized as separate voices for さび助 and ハル. Set `ELEVENLABS_API_KEY`, `ELEVENLABS_SABISUKE_VOICE_ID`, and `ELEVENLABS_HARU_VOICE_ID` as runtime secrets; never commit a populated `.env`. Optional settings are documented in `.env.example`.

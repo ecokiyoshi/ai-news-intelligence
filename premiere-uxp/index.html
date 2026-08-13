@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body{padding:16px;background:#1e1e1e;color:#eee;font:13px system-ui}h1{font-size:18px}button{display:block;width:100%;margin:9px 0;padding:9px}button:disabled{opacity:.5}.muted{color:#aaa}.ok{color:#8bd49c}.error{color:#ff8b8b}pre{white-space:pre-wrap;max-height:180px;overflow:auto}
+  </style>
+</head>
+<body>
+  <h1>AI News Timeline Builder</h1>
+  <p class="muted">Phase 1 · Premiere Pro 25.6+</p>
+  <button id="load">Select edit plan</button>
+  <button id="validate" disabled>Validate</button>
+  <button id="build" disabled>Build timeline</button>
+  <button id="rebuild" disabled>Rebuild generated timeline</button>
+  <pre id="status" class="muted">Select premiere-edit-plan.json.</pre>
+  <script src="src/validation.js"></script>
+  <script src="src/timeline-builder.js"></script>
+  <script src="src/panel.js"></script>
+</body>
+</html>

@@ -5,6 +5,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from support_shell import bash_command, install_python3_shim, prepend_path
+
 
 IMAGE_SHA = "0123456789abcdef0123456789abcdef01234567"
 IMAGE = f"ghcr.io/ecokiyoshi/ai-news-intelligence:sha-{IMAGE_SHA}"
@@ -15,7 +17,7 @@ def test_lightsail_bootstrap_has_valid_bash_syntax() -> None:
     script = repository / "deploy/lightsail-bootstrap.sh"
 
     result = subprocess.run(
-        ["bash", "-n", script],
+        bash_command("-n", script),
         check=False,
         capture_output=True,
         text=True,
@@ -43,6 +45,7 @@ def _deployment_fixture(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    install_python3_shim(fake_bin)
     command_log = tmp_path / "docker-commands.log"
     fake_docker = fake_bin / "docker"
     fake_docker.write_text(
@@ -84,12 +87,12 @@ elif "ps" in arguments and "-q" in arguments:
     environment = os.environ.copy()
     environment.update(
         {
-            "PATH": f"{fake_bin}:{environment['PATH']}",
             "FAKE_DEPLOY_DIR": str(deployment),
             "FAKE_DOCKER_LOG": str(command_log),
             "DEPLOY_HEALTH_TIMEOUT_SECONDS": "2",
         }
     )
+    prepend_path(environment, fake_bin)
     return deployment, environment, command_log
 
 
@@ -97,7 +100,7 @@ def test_deploy_uses_immutable_image_without_destroying_data(tmp_path: Path) -> 
     deployment, environment, command_log = _deployment_fixture(tmp_path)
 
     result = subprocess.run(
-        [deployment / "scripts/deploy.sh", IMAGE],
+        bash_command(deployment / "scripts/deploy.sh", IMAGE),
         cwd=deployment,
         env=environment,
         check=False,
@@ -123,7 +126,7 @@ def test_rollback_rejects_moving_tag(tmp_path: Path) -> None:
     deployment, environment, command_log = _deployment_fixture(tmp_path)
 
     result = subprocess.run(
-        [deployment / "scripts/rollback.sh", "latest"],
+        bash_command(deployment / "scripts/rollback.sh", "latest"),
         cwd=deployment,
         env=environment,
         check=False,
@@ -139,7 +142,7 @@ def test_rollback_accepts_previous_immutable_sha(tmp_path: Path) -> None:
     deployment, environment, _ = _deployment_fixture(tmp_path)
 
     result = subprocess.run(
-        [deployment / "scripts/rollback.sh", f"sha-{IMAGE_SHA}"],
+        bash_command(deployment / "scripts/rollback.sh", f"sha-{IMAGE_SHA}"),
         cwd=deployment,
         env=environment,
         check=False,
