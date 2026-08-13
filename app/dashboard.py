@@ -13,6 +13,8 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
+from app.editorial_workflow import editorial_status
+
 router = APIRouter()
 
 RUN_FILENAME = "run.json"
@@ -112,6 +114,7 @@ def summarize_run(run_id: str, data: dict[str, Any]) -> dict[str, Any]:
         "dialogue_count": dialogue_count,
         "scene_count": len(_list(visual_plan.get("scenes"))),
         "image_count": len(_image_filenames(run_id, data)),
+        "editorial_status": editorial_status(data),
     }
 
 
@@ -221,7 +224,7 @@ def _project_card(run: dict[str, Any]) -> str:
     encoded = quote(run_id, safe="")
     title = _text(run.get("title"), "Untitled YouTube project")
     score = _score_text(run.get("potential_score"))
-    return f"""<a class="project" href="/dashboard/runs/{encoded}"><div class="project-top"><div><div class="date">{_e(run.get('created_at'))}</div><h2>{_e(title)}</h2><div class="muted">{_e(run.get('channel_focus'))} · {_e(run_id)}</div></div><div class="score">Potential {html.escape(score)}</div></div><div class="stats"><span class="pill">{_e(run.get('chapter_count'))} chapters</span><span class="pill">{_e(run.get('dialogue_count'))} dialogue lines</span><span class="pill">{_e(run.get('scene_count'))} scenes</span><span class="pill">{_e(run.get('image_count'))} images</span></div></a>"""
+    return f"""<a class="project" href="/dashboard/runs/{encoded}"><div class="project-top"><div><div class="date">{_e(run.get('created_at'))}</div><h2>{_e(title)}</h2><div class="muted">{_e(run.get('channel_focus'))} · {_e(run_id)}</div></div><div class="score">Potential {html.escape(score)}</div></div><div class="stats"><span class="pill">{_e(run.get('editorial_status'))}</span><span class="pill">{_e(run.get('chapter_count'))} chapters</span><span class="pill">{_e(run.get('dialogue_count'))} dialogue lines</span><span class="pill">{_e(run.get('scene_count'))} scenes</span><span class="pill">{_e(run.get('image_count'))} images</span></div></a>"""
 
 
 @router.get("/", include_in_schema=False)
@@ -255,7 +258,7 @@ def _overview(run_id: str, data: dict[str, Any], summary: dict[str, Any]) -> str
         ("Run ID", data.get("run_id") or run_id), ("Created At", data.get("created_at")),
         ("Channel Focus", data.get("channel_focus")), ("Source Articles", source_count),
         ("Potential Score", _score_text(summary.get("potential_score"))), ("Generated Scenes", summary.get("scene_count")),
-        ("Images", summary.get("image_count")),
+        ("Images", summary.get("image_count")), ("Editorial Status", summary.get("editorial_status")),
     ]
     metrics = "".join(f'<div class="metric"><span>{html.escape(label)}</span><strong>{_e(value)}</strong></div>' for label, value in items)
     providers = _structured_fields(data.get("providers"))
