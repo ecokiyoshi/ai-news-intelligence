@@ -26,7 +26,9 @@ class PreviousTopic:
 
 
 def _tokens(title: str) -> set[str]:
-    normalized = unicodedata.normalize("NFKC", title).casefold().replace("窶・, "'")
+    normalized = unicodedata.normalize("NFKC", title).casefold().replace(
+        "\N{RIGHT SINGLE QUOTATION MARK}", "'"
+    )
     return {
         token.rstrip("s") if len(token) > 4 else token
         for token in _WORD.findall(normalized)
