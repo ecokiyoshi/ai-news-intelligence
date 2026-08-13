@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database import create_db_engine, init_db
 from app.pipeline import MetadataTextProvider
 from app.production_pipeline import (
+    NoFreshYouTubeIdeaError,
     NoPriorityNewsError,
     ProductionProviders,
     run_production_pipeline,
@@ -42,10 +43,10 @@ def local_providers(*, idea_generator=None) -> ProductionProviders:
     )
 
 
-def feed(title: str = "AI model release") -> dict:
+def feed(title: str = "AI model release", link: str = "https://example.com/article") -> dict:
     return {
         "feed": {"title": "Example News"},
-        "entries": [{"title": title, "link": "https://example.com/article"}],
+        "entries": [{"title": title, "link": link}],
     }
 
 
@@ -81,7 +82,11 @@ def test_local_end_to_end_pipeline_persists_complete_unique_runs(
     output_root = tmp_path / "outputs"
     with production_db() as session:
         first = execute(session, output_root, lambda _url: feed())
-        second = execute(session, output_root, lambda _url: feed())
+        second = execute(
+            session,
+            output_root,
+            lambda _url: feed("Robotics safety release", "https://example.com/robotics"),
+        )
 
     assert first.run_id != second.run_id
     assert Path(first.output_directory).name == first.run_id
@@ -180,3 +185,16 @@ def test_scene_limit_rejects_before_image_provider_call(
             feed_parser=lambda _url: feed(),
         )
     assert visual_planner.received_limit == 1
+
+
+def test_repeated_topic_stops_before_potential_and_image_work(
+    production_db, tmp_path: Path
+) -> None:
+    output_root = tmp_path / "outputs"
+    with production_db() as session:
+        execute(session, output_root, lambda _url: feed())
+        before = {path.name for path in output_root.iterdir()}
+        with pytest.raises(NoFreshYouTubeIdeaError, match="10 most recent"):
+            execute(session, output_root, lambda _url: feed())
+    assert {path.name for path in output_root.iterdir()} == before
+

@@ -21,6 +21,7 @@ from app.pipeline import ArticleTextProvider, PipelineResult, run_pipeline
 from app.ranking import select_priority_articles
 from app.scoring import Scorer
 from app.summarization import Summarizer
+from app.topic_deduplication import load_previous_topics, remove_repeated_ideas
 from app.youtube_dialogue import (
     YouTubeDialogueConverter,
     YouTubeDialogueScript,
@@ -72,6 +73,10 @@ RUN_METADATA_FILENAME = "run.json"
 
 class NoPriorityNewsError(RuntimeError):
     """Raised before YouTube providers run when ranking selects no news."""
+
+
+class NoFreshYouTubeIdeaError(RuntimeError):
+    """Raised when every generated idea repeats a recently produced topic."""
 
 
 @dataclass(frozen=True)
@@ -225,6 +230,16 @@ def run_production_pipeline(
         channel_focus=channel_focus,
         idea_count=idea_count,
     )
+    previous_topics = load_previous_topics(
+        output_root, channel_focus=channel_focus, limit=10
+    )
+    ideas, repeated_ideas = remove_repeated_ideas(ideas, previous_topics)
+    if not ideas:
+        repeated_titles = "; ".join(idea.title for idea in repeated_ideas)
+        raise NoFreshYouTubeIdeaError(
+            "all generated ideas repeat one of the 10 most recent productions: "
+            f"{repeated_titles}"
+        )
     potentials = score_youtube_ideas(
         ideas, providers.potential_scorer, channel_focus=channel_focus
     )
@@ -316,3 +331,4 @@ def run_production_pipeline(
         },
     )
     return result
+
