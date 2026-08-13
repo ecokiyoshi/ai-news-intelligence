@@ -1,0 +1,118 @@
+name: Export production artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Production run ID to export
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    name: Export one production run
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_PORT: ${{ secrets.VPS_PORT }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+      DEPLOY_DIR: /opt/ai-news-intelligence
+      RUN_ID: ${{ inputs.run_id }}
+
+    steps:
+      - name: Configure verified SSH connection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          required=(VPS_HOST VPS_USER VPS_PORT VPS_SSH_KEY VPS_KNOWN_HOSTS)
+          for variable in "${required[@]}"; do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "::error::Required production secret is missing: ${variable}"
+              exit 1
+            fi
+          done
+          [[ "${VPS_HOST}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$ ]]
+          [[ "${VPS_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "${VPS_USER}" != "root" ]]
+          [[ "${VPS_PORT}" =~ ^[0-9]{1,5}$ ]]
+          ((10#${VPS_PORT} >= 1 && 10#${VPS_PORT} <= 65535))
+          [[ "${RUN_ID}" =~ ^[0-9]{8}T[0-9]{12}Z-[a-f0-9]{8}$ ]]
+
+          umask 077
+          install -d "${HOME}/.ssh"
+          printf '%s\n' "${VPS_SSH_KEY}" >"${HOME}/.ssh/export_key"
+          printf '%s\n' "${VPS_KNOWN_HOSTS}" >"${HOME}/.ssh/known_hosts"
+
+      - name: Export requested run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          archive="${RUNNER_TEMP}/${RUN_ID}.zip"
+          ssh_options=(
+            -i "${HOME}/.ssh/export_key"
+            -p "${VPS_PORT}"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+          )
+          target="${VPS_USER}@${VPS_HOST}"
+          ssh "${ssh_options[@]}" "${target}" bash -se -- "${DEPLOY_DIR}" "${RUN_ID}" >"${archive}" <<'REMOTE'
+          set -Eeuo pipefail
+          deploy_dir="$1"
+          run_id="$2"
+          cd "${deploy_dir}"
+          compose=(docker compose --env-file .env -f compose.production.yaml)
+          "${compose[@]}" exec -T dashboard python - "${run_id}" <<'PYTHON'
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          run_id = sys.argv[1]
+          root = Path("/data/outputs").resolve()
+          source = (root / run_id).resolve()
+          if source.parent != root or not source.is_dir():
+              raise SystemExit(f"production run not found: {run_id}")
+          with zipfile.ZipFile(sys.stdout.buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+              for path in sorted(source.rglob("*")):
+                  if path.is_file():
+                      archive.write(path, Path(run_id) / path.relative_to(source))
+          PYTHON
+          REMOTE
+
+          python - "${archive}" "${RUN_ID}" <<'PYTHON'
+          import sys
+          import zipfile
+
+          archive_path, run_id = sys.argv[1:]
+          with zipfile.ZipFile(archive_path) as archive:
+              names = archive.namelist()
+              required = {f"{run_id}/run.json", f"{run_id}/manifest.json"}
+              missing = required.difference(names)
+              if missing:
+                  raise SystemExit(f"export is missing required files: {sorted(missing)}")
+              bad = archive.testzip()
+              if bad:
+                  raise SystemExit(f"corrupt archive member: {bad}")
+          PYTHON
+
+      - name: Upload production artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-run-${{ inputs.run_id }}
+          path: ${{ runner.temp }}/${{ inputs.run_id }}.zip
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Remove SSH private key
+        if: always()
+        shell: bash
+        run: rm -f -- "${HOME}/.ssh/export_key"
+
