@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database import create_db_engine, init_db
 from app.pipeline import MetadataTextProvider
 from app.production_pipeline import (
+    EditorialReviewResult,
     NoFreshYouTubeIdeaError,
     NoPriorityNewsError,
     ProductionProviders,
@@ -124,6 +125,45 @@ def test_local_end_to_end_pipeline_persists_complete_unique_runs(
     assert "OPENAI_API_KEY" not in json.dumps(metadata)
 
 
+def test_editorial_review_stops_after_dialogue_and_persists_draft(
+    production_db, tmp_path: Path
+) -> None:
+    class ForbiddenVisualPlanner:
+        def plan(self, *args, **kwargs):
+            raise AssertionError("visual planning must wait for editorial approval")
+
+    providers = local_providers()
+    providers = ProductionProviders(
+        **{**providers.__dict__, "visual_planner": ForbiddenVisualPlanner()}
+    )
+    with production_db() as session:
+        result = run_production_pipeline(
+            ["https://example.com/feed.xml"],
+            "AI industry",
+            "Practical AI news",
+            providers,
+            session,
+            output_root=tmp_path / "outputs",
+            idea_count=1,
+            packaging_count=1,
+            target_minutes=15,
+            scene_limit=20,
+            image_size="160x90",
+            require_editorial_review=True,
+            feed_parser=lambda _url: feed(),
+        )
+
+    assert isinstance(result, EditorialReviewResult)
+    run_dir = Path(result.output_directory)
+    assert [path.name for path in run_dir.iterdir()] == ["run.json"]
+    metadata = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert metadata["editorial"]["status"] == "in_review"
+    assert metadata["editorial"]["revision"] == 1
+    assert metadata["visual_plan"] is None
+    assert metadata["generated_images"] == []
+    assert metadata["output_files"] == ["run.json"]
+
+
 def test_empty_feed_fails_before_downstream_youtube_provider(
     production_db, tmp_path: Path
 ) -> None:
@@ -197,4 +237,3 @@ def test_repeated_topic_stops_before_potential_and_image_work(
         with pytest.raises(NoFreshYouTubeIdeaError, match="10 most recent"):
             execute(session, output_root, lambda _url: feed())
     assert {path.name for path in output_root.iterdir()} == before
-
