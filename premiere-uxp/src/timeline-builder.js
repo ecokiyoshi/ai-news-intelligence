@@ -41,6 +41,35 @@
     return match;
   }
 
+  async function extendSceneStills(ppro, project, sequence, plan) {
+    const videoTrackIndex = plan.track_roles["video.scene"].preferred_index;
+    const videoTrack = await sequence.getVideoTrack(videoTrackIndex);
+    const clips = await videoTrack.getTrackItems(ppro.Constants.TrackItemType.CLIP, false);
+    const positioned = await Promise.all(clips.map(async clip => ({
+      clip,
+      start: (await clip.getStartTime()).seconds,
+    })));
+    const frameTolerance = 1 / plan.sequence.frame_rate;
+    const sceneClips = plan.scenes.map(scene => {
+      const match = positioned.find(item => Math.abs(item.start - scene.start_seconds) <= frameTolerance);
+      if (!match) throw new Error(`Inserted scene clip was not found at ${scene.start_seconds}s.`);
+      return { clip: match.clip, scene };
+    });
+    let committed = false;
+    project.lockedAccess(() => {
+      committed = project.executeTransaction(
+        compound => {
+          sceneClips.forEach(({ clip, scene }) => {
+            const end = ppro.TickTime.createWithSeconds(scene.start_seconds + scene.duration_seconds);
+            compound.addAction(clip.createSetEndAction(end));
+          });
+        },
+        `Set still durations for ${plan.sequence.name}`
+      );
+    });
+    if (!committed) throw new Error("Premiere rejected the still-duration transaction.");
+  }
+
   async function buildTimeline(plan, planDirectory, options) {
     const ppro = options && options.ppro ? options.ppro : require("premierepro");
     const rebuild = Boolean(options && options.rebuild);
@@ -90,9 +119,10 @@
       );
     });
     if (!committed) throw new Error("Premiere rejected the timeline transaction.");
+    await extendSceneStills(ppro, project, sequence, plan);
     await project.setActiveSequence(sequence);
     await project.openSequence(sequence);
     return { sequence, captionsMode: plan.captions.mode, overlayCount: plan.scenes.reduce((sum, scene) => sum + scene.overlay_text.length, 0) };
   }
-  return { buildTimeline, resolveAsset };
+  return { buildTimeline, extendSceneStills, resolveAsset };
 });
