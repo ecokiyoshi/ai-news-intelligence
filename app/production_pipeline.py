@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import NewsArticle
+from app.editorial_workflow import new_review_metadata
 from app.pipeline import ArticleTextProvider, PipelineResult, run_pipeline
 from app.ranking import select_priority_articles
 from app.scoring import Scorer
@@ -109,6 +110,20 @@ class ProductionPipelineResult:
     images: YouTubeImageGenerationResult
 
 
+@dataclass(frozen=True)
+class EditorialReviewResult:
+    """A persisted idea, script, and dialogue awaiting human approval."""
+
+    run_id: str
+    output_directory: str
+    news: PipelineResult
+    selected_idea: YouTubeIdea
+    potential: YouTubePotentialResult
+    selected_packaging: YouTubePackagingCandidate
+    script: YouTubeScript
+    dialogue: YouTubeDialogueScript
+
+
 def _run_id(created_at: datetime) -> str:
     return f"{created_at.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid.uuid4().hex[:8]}"
 
@@ -174,8 +189,9 @@ def run_production_pipeline(
     target_minutes: int = 15,
     scene_limit: int = 50,
     image_size: str = "1792x1024",
+    require_editorial_review: bool = False,
     feed_parser: Callable[[str], Any] = feedparser.parse,
-) -> ProductionPipelineResult:
+) -> ProductionPipelineResult | EditorialReviewResult:
     """Run existing validated services in production order and persist run artifacts."""
 
     if not isinstance(channel_focus, str) or not channel_focus.strip():
@@ -261,13 +277,6 @@ def run_production_pipeline(
     dialogue = convert_youtube_script_to_dialogue(
         script, providers.dialogue_converter, channel_focus=channel_focus
     )
-    visual_plan = generate_youtube_visual_plan(
-        dialogue,
-        providers.visual_planner,
-        channel_focus=channel_focus,
-        scene_limit=scene_limit,
-    )
-
     created_at = datetime.now(timezone.utc)
     output_root.mkdir(parents=True, exist_ok=True)
     while True:
@@ -278,6 +287,57 @@ def run_production_pipeline(
             break
         except FileExistsError:
             created_at = datetime.now(timezone.utc)
+
+    metadata = {
+        "run_id": run_id,
+        "created_at": created_at,
+        "channel_focus": channel_focus.strip(),
+        "news_pipeline": news,
+        "priority_news": [
+            {
+                **asdict(ranking),
+                "title": source.title,
+                "source": source.source,
+                "summary": source.summary,
+            }
+            for ranking, source in zip(news.priority_articles, sources, strict=True)
+        ],
+        "source_article_ids": selected.idea.source_article_ids,
+        "selected_youtube_idea": selected.idea,
+        "youtube_potential": selected.potential,
+        "selected_packaging": packaging,
+        "script": script,
+        "dialogue": dialogue,
+        "providers": _provider_metadata(providers),
+    }
+    if require_editorial_review:
+        _atomic_json(
+            output_directory / RUN_METADATA_FILENAME,
+            {
+                **metadata,
+                "editorial": new_review_metadata(created_at),
+                "visual_plan": None,
+                "generated_images": [],
+                "output_files": [RUN_METADATA_FILENAME],
+            },
+        )
+        return EditorialReviewResult(
+            run_id=run_id,
+            output_directory=str(output_directory),
+            news=news,
+            selected_idea=selected.idea,
+            potential=selected.potential,
+            selected_packaging=packaging,
+            script=script,
+            dialogue=dialogue,
+        )
+
+    visual_plan = generate_youtube_visual_plan(
+        dialogue,
+        providers.visual_planner,
+        channel_focus=channel_focus,
+        scene_limit=scene_limit,
+    )
 
     images = generate_youtube_scene_images(
         visual_plan,
@@ -301,25 +361,7 @@ def run_production_pipeline(
     _atomic_json(
         output_directory / RUN_METADATA_FILENAME,
         {
-            "run_id": run_id,
-            "created_at": created_at,
-            "channel_focus": channel_focus.strip(),
-            "news_pipeline": news,
-            "priority_news": [
-                {
-                    **asdict(ranking),
-                    "title": source.title,
-                    "source": source.source,
-                    "summary": source.summary,
-                }
-                for ranking, source in zip(news.priority_articles, sources, strict=True)
-            ],
-            "source_article_ids": selected.idea.source_article_ids,
-            "selected_youtube_idea": selected.idea,
-            "youtube_potential": selected.potential,
-            "selected_packaging": packaging,
-            "script": script,
-            "dialogue": dialogue,
+            **metadata,
             "visual_plan": visual_plan,
             "generated_images": images.assets,
             "output_files": [
@@ -327,8 +369,6 @@ def run_production_pipeline(
                 "manifest.json",
                 RUN_METADATA_FILENAME,
             ],
-            "providers": _provider_metadata(providers),
         },
     )
     return result
-
