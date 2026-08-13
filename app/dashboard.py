@@ -12,13 +12,31 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from pydantic import BaseModel
 
-from app.editorial_workflow import editorial_status
+from app.editorial_workflow import (
+    EditorialConflictError,
+    EditorialWorkflowError,
+    approve_revision,
+    continue_approved_run,
+    editable_content,
+    editorial_status,
+    save_revision,
+)
 
 router = APIRouter()
 
 RUN_FILENAME = "run.json"
 IMAGE_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
+
+
+class EditorialSaveRequest(BaseModel):
+    expected_revision: int
+    content: dict[str, Any]
+
+
+class EditorialActionRequest(BaseModel):
+    expected_revision: int
 
 
 def output_directory() -> Path:
@@ -242,6 +260,54 @@ def run_api(run_id: str) -> dict[str, Any]:
     return load_run(run_id)
 
 
+def _editorial_error(error: Exception) -> HTTPException:
+    if isinstance(error, EditorialConflictError):
+        return HTTPException(status_code=409, detail=str(error))
+    return HTTPException(status_code=422, detail=str(error))
+
+
+@router.put("/api/runs/{run_id}/editorial")
+def save_editorial(run_id: str, request: EditorialSaveRequest) -> dict[str, Any]:
+    try:
+        return save_revision(
+            _run_directory(run_id),
+            expected_revision=request.expected_revision,
+            content=request.content,
+        )
+    except EditorialWorkflowError as error:
+        raise _editorial_error(error) from error
+
+
+@router.post("/api/runs/{run_id}/approve")
+def approve_editorial(run_id: str, request: EditorialActionRequest) -> dict[str, Any]:
+    try:
+        return approve_revision(
+            _run_directory(run_id), expected_revision=request.expected_revision
+        )
+    except EditorialWorkflowError as error:
+        raise _editorial_error(error) from error
+
+
+@router.post("/api/runs/{run_id}/continue")
+def continue_editorial(run_id: str) -> dict[str, Any]:
+    from app.runtime import RuntimeConfig, build_production_providers
+
+    config = RuntimeConfig.from_env(require_pipeline=False)
+    providers = build_production_providers(config)
+    try:
+        return continue_approved_run(
+            _run_directory(run_id),
+            visual_planner=providers.visual_planner,
+            image_generator=providers.image_generator,
+            scene_limit=config.scene_limit,
+            image_size=config.image_size,
+        )
+    except EditorialWorkflowError as error:
+        raise _editorial_error(error) from error
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=str(error) or type(error).__name__) from error
+
+
 @router.get("/dashboard", response_class=HTMLResponse)
 def dashboard() -> HTMLResponse:
     runs = discover_runs()
@@ -263,6 +329,20 @@ def _overview(run_id: str, data: dict[str, Any], summary: dict[str, Any]) -> str
     metrics = "".join(f'<div class="metric"><span>{html.escape(label)}</span><strong>{_e(value)}</strong></div>' for label, value in items)
     providers = _structured_fields(data.get("providers"))
     return f'<div class="overview">{metrics}</div><div class="providers"><h3>Providers &amp; Models</h3>{providers}</div>'
+
+
+def _editorial_controls(run_id: str, data: dict[str, Any]) -> str:
+    editorial = _dict(data.get("editorial"))
+    if not editorial:
+        return ""
+    status = editorial_status(data)
+    encoded = quote(run_id, safe="")
+    if status == "in_review":
+        return f'<a class="copy" style="float:none" href="/dashboard/runs/{encoded}/edit">企画・台本・対話を確認・修正</a>'
+    if status in {"approved", "generation_failed"}:
+        label = "生成を再試行" if status == "generation_failed" else "シーン画像を生成"
+        return f'''<button class="copy" style="float:none" onclick="continueRun()">{label}</button><span id="continue-status"></span><script>async function continueRun(){{const s=document.getElementById("continue-status");s.textContent=" processing...";try{{const r=await fetch("/api/runs/{encoded}/continue",{{method:"POST"}});const j=await r.json();if(!r.ok)throw new Error(j.detail||"generation failed");location.reload()}}catch(e){{s.textContent=" "+e.message}}}}</script>'''
+    return ""
 
 
 def _script_html(value: Any) -> str:
@@ -360,13 +440,19 @@ def _audio_html(run_id: str) -> str:
 def run_detail(run_id: str) -> HTMLResponse:
     data = load_run(run_id)
     summary = summarize_run(run_id, data)
+    audio = (
+        _audio_html(run_id)
+        if editorial_status(data) == "completed"
+        else '<p class="muted">音声生成は編集承認とシーン画像生成の完了後に利用できます。</p>'
+    )
     sections = [
         ("overview", "Overview", _overview(run_id, data, summary)),
+        ("editorial", "Editorial Review", _editorial_controls(run_id, data) or '<p class="muted">This completed run is read-only.</p>'),
         ("idea", "YouTube Idea", _structured_fields(data.get("selected_youtube_idea"))),
         ("packaging", "Packaging", _structured_fields(data.get("selected_packaging"))),
         ("script", "15-Minute YouTube Script", _script_html(data.get("script"))),
         ("dialogue", "さび助 × ハル Dialogue", _dialogue_html(data.get("dialogue"))),
-        ("audio", "Dialogue Audio", _audio_html(run_id)),
+        ("audio", "Dialogue Audio", audio),
         ("visuals", "Visual Plan", _visual_html(data.get("visual_plan"))),
         ("images", "Generated Images", _gallery_html(run_id, data)),
         ("json", "Raw JSON", f'<pre class="raw">{html.escape(json.dumps(data, ensure_ascii=False, indent=2))}</pre>'),
@@ -375,6 +461,35 @@ def run_detail(run_id: str) -> HTMLResponse:
     content = "".join(f'<section class="section" id="{anchor}"><h2>{html.escape(title)}</h2>{markup}</section>' for anchor, title, markup in sections)
     body = f'<main class="shell"><section class="hero"><div class="eyebrow">Project detail</div><h1 class="title">{_e(summary.get("title"), "Untitled project")}</h1></section><div class="detail-layout"><aside class="side">{side}</aside><div class="content">{content}</div></div></main>'
     return _page(_text(summary.get("title"), "Project"), body)
+
+
+@router.get("/dashboard/runs/{run_id}/edit", response_class=HTMLResponse)
+def edit_run(run_id: str) -> HTMLResponse:
+    data = load_run(run_id)
+    editorial = _dict(data.get("editorial"))
+    if editorial_status(data) != "in_review":
+        raise HTTPException(status_code=409, detail="Only in-review runs can be edited")
+    revision = editorial.get("revision")
+    content = editable_content(data)
+    editors = []
+    for key, label in (
+        ("selected_youtube_idea", "企画"),
+        ("script", "台本"),
+        ("dialogue", "対話"),
+    ):
+        value = html.escape(json.dumps(content[key], ensure_ascii=False, indent=2))
+        editors.append(
+            f'<label for="{key}"><h2>{label}</h2></label>'
+            f'<textarea id="{key}" style="width:100%;min-height:22rem;background:#0d1524;color:#e8eef8;border:1px solid #334155;border-radius:12px;padding:16px;font-family:monospace">{value}</textarea>'
+        )
+    encoded = quote(run_id, safe="")
+    body = f'''<main class="shell"><section class="hero"><div class="eyebrow">Editorial review · revision {revision}</div><h1>企画・台本・対話の確認</h1><p>JSONの値を修正して保存してください。構造が不正な場合は保存されません。</p></section><section class="section">{"".join(editors)}<p><button class="copy" style="float:none" onclick="saveDraft()">修正を保存</button> <button class="copy" style="float:none" onclick="approveDraft()">このリビジョンを承認</button> <a href="/dashboard/runs/{encoded}">詳細へ戻る</a></p><p id="editor-status"></p></section></main><script>
+let revision={json.dumps(revision)};
+function content(){{return {{selected_youtube_idea:JSON.parse(document.getElementById("selected_youtube_idea").value),script:JSON.parse(document.getElementById("script").value),dialogue:JSON.parse(document.getElementById("dialogue").value)}}}}
+async function saveDraft(){{const s=document.getElementById("editor-status");try{{const r=await fetch("/api/runs/{encoded}/editorial",{{method:"PUT",headers:{{"content-type":"application/json"}},body:JSON.stringify({{expected_revision:revision,content:content()}})}});const j=await r.json();if(!r.ok)throw new Error(j.detail||"save failed");revision=j.editorial.revision;s.textContent="保存しました。revision "+revision}}catch(e){{s.textContent="保存できません: "+e.message}}}}
+async function approveDraft(){{if(!confirm("現在のリビジョンを承認しますか？承認後は編集できません。"))return;const s=document.getElementById("editor-status");try{{const r=await fetch("/api/runs/{encoded}/approve",{{method:"POST",headers:{{"content-type":"application/json"}},body:JSON.stringify({{expected_revision:revision}})}});const j=await r.json();if(!r.ok)throw new Error(j.detail||"approval failed");location.href="/dashboard/runs/{encoded}"}}catch(e){{s.textContent="承認できません: "+e.message}}}}
+</script>'''
+    return _page("Editorial review", body)
 
 
 @router.get("/dashboard/runs/{run_id}/images/{filename:path}", response_class=FileResponse)
