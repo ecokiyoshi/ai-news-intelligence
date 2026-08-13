@@ -85,6 +85,7 @@ def test_runs_are_newest_first_and_malformed_run_is_skipped(monkeypatch, tmp_pat
     assert [run["run_id"] for run in response.json()] == ["newer", "older"]
     assert response.json()[0]["scene_count"] == 1
     assert response.json()[0]["image_count"] == 1
+    assert response.json()[0]["editorial_status"] == "completed"
 
 
 def test_run_api_detail_and_missing(monkeypatch, tmp_path: Path) -> None:
